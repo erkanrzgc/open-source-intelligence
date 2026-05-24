@@ -43,6 +43,7 @@ toutatis = ["toutatis>=1.4"]
 phone = ["phonenumbers>=8.13"]
 tor = ["stem>=1.8.2"]
 browser = ["playwright>=1.40.0"]
+filetype = ["magika>=0.6.0"]
 ai = [
     "llama-cpp-python>=0.3.0",
     "huggingface_hub>=0.24.0",
@@ -66,6 +67,7 @@ all = [
     "phonenumbers>=8.13",
     "stem>=1.8.2",
     "playwright>=1.40.0",
+    "magika>=0.6.0",
     "llama-cpp-python>=0.3.0",
     "huggingface_hub>=0.24.0",
 ]
@@ -81,6 +83,7 @@ dev = [
 ]
 
 [project.scripts]
+cyberm4fia = "main:main"
 cyberm4fia-osint = "main:main"
 
 [project.urls]

@@ -43,11 +43,13 @@ import asyncio
 import io
 import re
 import zipfile
+from dataclasses import replace
 from typing import Final
 from xml.etree import ElementTree as ET
 
 from core.http_client import HTTPClient
 from core.logging_setup import get_logger
+from modules.recon import filetype
 from modules.recon.models import DocumentMetadata
 
 log = get_logger(__name__)
@@ -56,6 +58,7 @@ _DEFAULT_MAX_SIZE: Final[int] = 10 * 1024 * 1024  # 10 MB
 
 _PDF_MAGIC = b"%PDF-"
 _ZIP_MAGIC = b"PK\x03\x04"
+_DOC_URL_RE = re.compile(r"\.(?:pdf|docx|xlsx|pptx)(?:[?#].*)?$", re.I)
 
 # UNC paths: \\host\share[\subpath...]. Host can have dots (FQDN). The
 # tail accepts standard share-name and path characters.
@@ -97,6 +100,42 @@ def _detect_format(data: bytes, *, url: str) -> str:
         except zipfile.BadZipFile:
             return ""
     return ""
+
+
+def _detection_raw(detection: filetype.FileTypeDetection | None) -> dict:
+    return detection.to_dict() if detection is not None else {}
+
+
+def _with_detection(
+    meta: DocumentMetadata,
+    detection: filetype.FileTypeDetection | None,
+) -> DocumentMetadata:
+    raw = dict(meta.raw)
+    raw.update(_detection_raw(detection))
+    return replace(meta, raw=raw)
+
+
+def _spoof_report(
+    *,
+    url: str,
+    detection: filetype.FileTypeDetection | None,
+) -> DocumentMetadata | None:
+    """Return a lightweight report for document-looking URLs that are not
+    parser-supported documents.
+
+    This catches cases like ``invoice.pdf`` serving HTML, script, or a
+    binary blob. We do not attempt metadata extraction for those files;
+    we just surface the mismatch for the operator.
+    """
+    if detection is None or not _DOC_URL_RE.search(url):
+        return None
+    raw = _detection_raw(detection)
+    raw["unsupported_document_payload"] = True
+    return DocumentMetadata(
+        url=url,
+        format=detection.label or "unknown",
+        raw=raw,
+    )
 
 
 def _extract_network_paths(text: str) -> tuple[str, ...]:
@@ -141,7 +180,7 @@ def _parse_docx(data: bytes, *, url: str) -> DocumentMetadata | None:
             full_text = _all_text_from_zip(z)
     except zipfile.BadZipFile:
         return None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.debug("docx parse failed for %s: %s", url, exc)
         return None
 
@@ -217,7 +256,7 @@ def _parse_pdf(data: bytes, *, url: str) -> DocumentMetadata | None:
     except (PdfReadError, ValueError, OSError) as exc:
         log.debug("pdf parse failed for %s: %s", url, exc)
         return None
-    except Exception as exc:  # noqa: BLE001 — pypdf may raise odd things
+    except Exception as exc:
         log.debug("pdf parse unexpected error for %s: %s", url, exc)
         return None
 
@@ -254,20 +293,28 @@ def _safe_pdf_text(data: bytes) -> str:
     """
     try:
         return data.decode("latin-1", "ignore")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 
 # ── Public entry points ─────────────────────────────────────────────
 
 
-def _parse(data: bytes, *, url: str) -> DocumentMetadata | None:
-    fmt = _detect_format(data, url=url)
+def _parse(
+    data: bytes,
+    *,
+    url: str,
+    detection: filetype.FileTypeDetection | None = None,
+) -> DocumentMetadata | None:
+    fmt = filetype.supported_document_format(detection) or _detect_format(data, url=url)
+    parsed: DocumentMetadata | None = None
     if fmt == "pdf":
-        return _parse_pdf(data, url=url)
-    if fmt in ("docx", "xlsx", "pptx"):
-        return _parse_docx(data, url=url)
-    return None
+        parsed = _parse_pdf(data, url=url)
+    elif fmt in ("docx", "xlsx", "pptx"):
+        parsed = _parse_docx(data, url=url)
+    if parsed is not None:
+        return _with_detection(parsed, detection)
+    return _spoof_report(url=url, detection=detection)
 
 
 async def extract_from_url(
@@ -291,7 +338,8 @@ async def extract_from_url(
             "doc_metadata: %s exceeds max_size (%d > %d)", url, len(data), max_size
         )
         return None
-    return _parse(data, url=url)
+    detection = filetype.identify_bytes(data)
+    return _parse(data, url=url, detection=detection)
 
 
 async def extract_batch(

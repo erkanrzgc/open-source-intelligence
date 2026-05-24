@@ -91,9 +91,21 @@ def print_banner() -> None:
         console.print(f"[#{r:02x}{g:02x}{b:02x}]{line}[/]")
     console.print(f"[#646464]{'─' * 80}[/]")
     console.print(
-        "  [dim]Open Source Intelligence by cyber4mfia![/dim]\n",
+        "  [dim]Open Source Intelligence by cyberm4fia[/dim]\n",
         justify="center",
     )
+
+
+def print_breach_notice() -> None:
+    console.print(
+        Panel(
+            "[yellow]--breach[/yellow] selected; [cyan]email discovery[/cyan] has been auto-enabled.",
+            title="[bold yellow]NOTICE[/bold yellow]",
+            border_style="yellow",
+            padding=(0, 2),
+        )
+    )
+    console.print()
 
 
 def print_scan_start(username: str, mode: str, platform_count: int) -> None:

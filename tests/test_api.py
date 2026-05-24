@@ -319,6 +319,21 @@ async def test_scan_job_events_stream_result(client: TestClient) -> None:
     assert "mallory" in text
 
 
+def test_scan_job_capacity_returns_429(client: TestClient) -> None:
+    class _FullStore:
+        def create_job(self, *args, **kwargs):
+            raise RuntimeError("scan job queue is full")
+
+    client.app.state.scan_jobs = _FullStore()
+    r = client.post(
+        "/scan-jobs",
+        json={"username": "alice", "save_history": False},
+    )
+
+    assert r.status_code == 429
+    assert "queue is full" in r.json()["detail"]
+
+
 def test_graph_404_when_no_history(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(api_server, "get_latest", lambda u, before_id=None: None)
     r = client.get("/graph/ghost")
@@ -760,3 +775,67 @@ def test_auth_gate_blocks_protected_when_required(
     ).json()["access_token"]
     r = gated.get("/watchlist", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
+
+
+def test_auth_gate_viewer_is_read_only(tmp_path: Path, monkeypatch) -> None:
+    wl_db = tmp_path / "wl-viewer.sqlite3"
+    monkeypatch.setattr(watchlist, "DEFAULT_DB_PATH", wl_db)
+    for fn in (watchlist.add, watchlist.remove, watchlist.list_all,
+              watchlist.mark_scanned, watchlist.get):
+        monkeypatch.setitem(fn.__kwdefaults__, "db_path", wl_db)
+
+    users_db = tmp_path / "users-viewer.sqlite3"
+    monkeypatch.setattr(auth, "DEFAULT_DB_PATH", users_db)
+    for fn in (auth.create_user, auth.get_user, auth.list_users, auth.authenticate):
+        monkeypatch.setitem(fn.__kwdefaults__, "db_path", users_db)
+
+    monkeypatch.setenv("OSINT_AUTH_SECRET", "viewer-secret")
+    monkeypatch.setenv("OSINT_AUTH_REQUIRED", "1")
+
+    gated = TestClient(api.create_app())
+    auth.create_user("viewer", "pw", role="viewer")
+    token = gated.post(
+        "/auth/login", json={"username": "viewer", "password": "pw"}
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert gated.get("/watchlist", headers=headers).status_code == 200
+    assert gated.post(
+        "/watchlist", json={"username": "alice"}, headers=headers
+    ).status_code == 403
+
+
+def test_auth_gate_delete_requires_admin(tmp_path: Path, monkeypatch) -> None:
+    wl_db = tmp_path / "wl-admin.sqlite3"
+    monkeypatch.setattr(watchlist, "DEFAULT_DB_PATH", wl_db)
+    for fn in (watchlist.add, watchlist.remove, watchlist.list_all,
+              watchlist.mark_scanned, watchlist.get):
+        monkeypatch.setitem(fn.__kwdefaults__, "db_path", wl_db)
+
+    users_db = tmp_path / "users-admin.sqlite3"
+    monkeypatch.setattr(auth, "DEFAULT_DB_PATH", users_db)
+    for fn in (auth.create_user, auth.get_user, auth.list_users, auth.authenticate):
+        monkeypatch.setitem(fn.__kwdefaults__, "db_path", users_db)
+
+    monkeypatch.setenv("OSINT_AUTH_SECRET", "admin-secret")
+    monkeypatch.setenv("OSINT_AUTH_REQUIRED", "1")
+
+    watchlist.add("alice")
+    gated = TestClient(api.create_app())
+    auth.create_user("analyst", "pw", role="analyst")
+    auth.create_user("admin", "pw", role="admin")
+    analyst_token = gated.post(
+        "/auth/login", json={"username": "analyst", "password": "pw"}
+    ).json()["access_token"]
+    admin_token = gated.post(
+        "/auth/login", json={"username": "admin", "password": "pw"}
+    ).json()["access_token"]
+
+    assert gated.delete(
+        "/watchlist/alice",
+        headers={"Authorization": f"Bearer {analyst_token}"},
+    ).status_code == 403
+    assert gated.delete(
+        "/watchlist/alice",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    ).status_code == 200

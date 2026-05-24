@@ -7,6 +7,7 @@ from aioresponses import aioresponses
 from core import engine as engine_mod
 from core.config import ScanConfig
 from core.engine import (
+    _check_platform,
     _extract_avatar_urls,
     _phase_recursive,
     _phase_smart_search,
@@ -27,6 +28,10 @@ class TestStatusFromHttp:
 
     def test_blocked(self):
         assert _status_from_http(429, False) == "blocked"
+
+    def test_login_required(self):
+        assert _status_from_http(401, False) == "login_required"
+        assert _status_from_http(403, False) == "login_required"
 
     def test_found(self):
         assert _status_from_http(200, True) == "found"
@@ -89,6 +94,68 @@ class TestExtractAvatarUrls:
     def test_no_profile_data(self):
         p = PlatformResult(platform="gh", url="https://x", category="dev")
         assert _extract_avatar_urls([p]) == []
+
+
+class _HTMLClient:
+    def __init__(self, status: int, body: str):
+        self.status = status
+        self.body = body
+
+    async def get(self, _url, _headers=None):
+        return self.status, self.body, 0.01
+
+
+@pytest.mark.asyncio
+async def test_check_platform_marks_login_wall_as_not_found():
+    body = """
+    <html><head><title>alice profile</title></head>
+    <body>You must log in to view this profile.</body></html>
+    """
+    platform = Platform(
+        name="LockedSite",
+        url="https://locked.example/{username}",
+        category="social",
+        check_type="status",
+    )
+
+    result = await _check_platform(_HTMLClient(200, body), ScanConfig(username="alice"), platform)
+
+    assert result.exists is False
+    assert result.status == "login_required"
+    assert result.fp_signals == ["login_required"]
+
+
+def test_scan_result_payload_omits_not_found_platforms():
+    result = ScanResult(username="alice")
+    result.platforms = [
+        PlatformResult(
+            platform="GitHub",
+            url="https://github.com/alice",
+            category="dev",
+            exists=True,
+            status="found",
+        ),
+        PlatformResult(
+            platform="Twitter",
+            url="https://twitter.com/alice",
+            category="social",
+            exists=False,
+            status="not_found",
+        ),
+        PlatformResult(
+            platform="LockedSite",
+            url="https://locked.example/alice",
+            category="social",
+            exists=False,
+            status="login_required",
+        ),
+    ]
+
+    payload = result.to_dict()
+
+    assert payload["total_checked"] == 3
+    assert payload["found_count"] == 1
+    assert [p["platform"] for p in payload["platforms"]] == ["GitHub"]
 
 
 @pytest.mark.asyncio
@@ -325,7 +392,7 @@ async def test_phase_recon_populates_all_three_slots(monkeypatch, tmp_path):
         return [GithubCommitter(email="ada@acme.com", name="Ada", repo="acme/x")]
 
     async def fake_enrich(_client, _domain, *, existing=None):
-        hosts = list(existing or []) + ["vpn.acme.com"]
+        hosts = [*list(existing or []), "vpn.acme.com"]
         return [ReconSubdomain(host=h, source="dns_lookup") for h in hosts]
 
     async def fake_secret_scan(_client, *, org=None, domain=None, repos=None,
@@ -429,6 +496,45 @@ async def test_phase_recon_populates_leaked_secrets(monkeypatch):
     payload = result.to_dict()
     assert "leaked_secrets" in payload
     assert payload["leaked_secrets"][0]["value"] == "AKIAIOSFODNN7XAAAAAA"
+
+
+@pytest.mark.asyncio
+async def test_phase_gitleaks_appends_local_secret_findings(monkeypatch):
+    from core.engine import _phase_gitleaks
+    from modules.recon import gitleaks
+    from modules.recon.models import LeakedSecret
+
+    async def fake_scan_path(path, *, no_git=False, timeout=120):
+        assert path == "/tmp/repo"
+        assert no_git is True
+        assert timeout == 9
+        return [
+            LeakedSecret(
+                rule_id="generic-api-key",
+                value="dummy-secret-value",
+                repo="repo",
+                file_path="src/config.py",
+                url="file:///tmp/repo/src/config.py",
+                metadata={"source": "gitleaks"},
+            )
+        ]
+
+    monkeypatch.setattr(gitleaks, "scan_path", fake_scan_path)
+
+    cfg = ScanConfig(
+        username="u",
+        gitleaks_paths=("/tmp/repo",),
+        gitleaks_no_git=True,
+        gitleaks_timeout=9,
+    )
+    result = ScanResult(username="u")
+    result.leaked_secrets = [{"rule_id": "existing", "value": "already-there"}]
+
+    await _phase_gitleaks(cfg, result)
+
+    assert len(result.leaked_secrets) == 2
+    assert result.leaked_secrets[1]["rule_id"] == "generic-api-key"
+    assert result.leaked_secrets[1]["metadata"]["source"] == "gitleaks"
 
 
 @pytest.mark.asyncio

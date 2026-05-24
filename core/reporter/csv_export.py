@@ -60,7 +60,7 @@ def _platform_rows(result: ScanResult) -> list[list[Any]]:
             p.rendered,
             p.screenshot_path or "",
         ]
-        for p in result.platforms
+        for p in result.found_platforms
     ]
 
 

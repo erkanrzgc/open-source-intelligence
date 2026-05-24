@@ -7,6 +7,7 @@ Public API kept flat so callers can keep using
 from core.reporter.console_ui import (
     console,
     print_banner,
+    print_breach_notice,
     print_progress,
     print_results,
     print_scan_start,
@@ -37,6 +38,7 @@ __all__ = [
     "export_xlsx",
     "pdf_available",
     "print_banner",
+    "print_breach_notice",
     "print_progress",
     "print_results",
     "print_scan_start",

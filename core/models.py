@@ -7,7 +7,7 @@ class PlatformResult:
     url: str
     category: str
     exists: bool = False
-    status: str = "pending"  # found, not_found, error, timeout, blocked
+    status: str = "pending"  # found, not_found, error, timeout, blocked, soft_404_*, empty_profile
     response_time: float = 0.0
     profile_data: dict = field(default_factory=dict)
     http_status: int = 0
@@ -15,6 +15,8 @@ class PlatformResult:
     fp_signals: list = field(default_factory=list)
     rendered: bool = False  # True when Playwright served the body
     screenshot_path: str | None = None
+    final_url: str | None = None  # actual URL after redirects; None if no redirect or unknown
+    is_active_profile: bool | None = None  # liveness verdict (avatar/bio/og present); None when unverified
 
 
 @dataclass
@@ -132,8 +134,12 @@ class ScanResult:
                     "profile_data": p.profile_data,
                     "rendered": p.rendered,
                     "screenshot_path": p.screenshot_path,
+                    "confidence": round(p.confidence, 2),
+                    "fp_signals": list(p.fp_signals),
+                    "is_active_profile": p.is_active_profile,
+                    "final_url": p.final_url,
                 }
-                for p in self.platforms
+                for p in self.found_platforms
             ],
             "emails": [
                 {

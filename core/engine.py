@@ -8,6 +8,7 @@ and wiring it into scan().
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -39,6 +40,15 @@ from modules.photo_compare import compare_profile_photos
 from modules.platforms import PLATFORMS, Platform
 from modules.profile_extract import extract_profile
 from modules.profile_extract import is_available as _extract_available
+from modules.profile_liveness import score_liveness
+from modules.stealth import obscura_fallback
+from modules.stealth.js_wall import looks_like_js_wall
+from modules.stealth.soft_404 import (
+    IMPOSSIBLE_USERNAME,
+    Soft404Cache,
+    is_soft_404,
+    make_baseline,
+)
 from modules.stealth.playwright_fallback import (
     AVAILABLE as PLAYWRIGHT_AVAILABLE,
 )
@@ -53,6 +63,28 @@ from modules.whois_lookup import check_username_domains
 log = get_logger(__name__)
 
 AVATAR_KEYS = ("avatar_url", "icon_img", "avatar", "profile_image")
+
+# Module-level soft-404 baseline cache. Lazily instantiated so test code
+# that imports the engine without scanning doesn't touch the filesystem.
+_SOFT_404_CACHE: Soft404Cache | None = None
+
+
+def _soft_404_cache() -> Soft404Cache:
+    global _SOFT_404_CACHE
+    if _SOFT_404_CACHE is None:
+        _SOFT_404_CACHE = Soft404Cache()
+    return _SOFT_404_CACHE
+
+
+# Pending baseline-seed background tasks; awaited at end of run_scan so the
+# scan completes deterministically without leaking warnings about unawaited
+# coroutines.
+_PENDING_SEED_TASKS: set[asyncio.Task] = set()
+
+
+def _track_seed(task: asyncio.Task) -> None:
+    _PENDING_SEED_TASKS.add(task)
+    task.add_done_callback(_PENDING_SEED_TASKS.discard)
 IMPORTANT_PLATFORMS_FOR_VARIATIONS = frozenset(
     {
         "GitHub",
@@ -66,17 +98,70 @@ IMPORTANT_PLATFORMS_FOR_VARIATIONS = frozenset(
     }
 )
 
+_LOGIN_WALL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:log\s*in|login|sign\s*in|signin)\b.{0,80}"
+        r"\b(?:to\s+(?:view|continue|see)|required|profile|account)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:you\s+(?:must|need\s+to)|please)\b.{0,80}"
+        r"\b(?:log\s*in|login|sign\s*in|signin)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:authentication\s+required|login\s+required|private\s+profile|"
+        r"private\s+account|this\s+account\s+is\s+private|protected\s+profile)\b",
+        re.IGNORECASE,
+    ),
+)
+
 
 # ── Phase helpers ─────────────────────────────────────────────────────────
 
 
 def _should_render(platform: Platform, cfg: ScanConfig) -> bool:
-    if not PLAYWRIGHT_AVAILABLE:
+    if not _selected_browser_available(cfg):
         return False
     if platform.check_type == "json_api":
         return False
     # Forced global opt-in (--playwright) OR platform flagged as js_heavy.
     return bool(cfg.playwright or platform.js_heavy)
+
+
+def _selected_browser_available(cfg: ScanConfig) -> bool:
+    if cfg.browser_backend == "obscura":
+        return obscura_fallback.is_available()
+    return PLAYWRIGHT_AVAILABLE
+
+
+async def _fetch_rendered_with_backend(
+    cfg: ScanConfig,
+    url: str,
+    *,
+    wait_for_selector: str | None,
+    timeout_ms: int,
+    proxy: str | None,
+    screenshot_dir: Path | None,
+    screenshot_name: str | None,
+):
+    if cfg.browser_backend == "obscura":
+        return await obscura_fallback.fetch_rendered(
+            url,
+            wait_for_selector=wait_for_selector,
+            timeout_ms=timeout_ms,
+            proxy=proxy,
+            screenshot_dir=screenshot_dir,
+            screenshot_name=screenshot_name,
+        )
+    return await fetch_rendered(
+        url,
+        wait_for_selector=wait_for_selector,
+        timeout_ms=timeout_ms,
+        proxy=proxy,
+        screenshot_dir=screenshot_dir,
+        screenshot_name=screenshot_name,
+    )
 
 
 def _screenshot_dir_for(cfg: ScanConfig) -> Path | None:
@@ -92,6 +177,7 @@ async def _check_platform(
     username = cfg.username
     url = platform.url.replace("{username}", username)
     result = PlatformResult(platform=platform.name, url=url, category=platform.category)
+    login_required = False
 
     try:
         if platform.check_type == "json_api":
@@ -103,10 +189,12 @@ async def _check_platform(
             status = -1
             body: str = ""
             elapsed = 0.0
+            final_url: str | None = None
 
             if _should_render(platform, cfg):
                 t0 = time.monotonic()
-                rendered = await fetch_rendered(
+                rendered = await _fetch_rendered_with_backend(
+                    cfg,
                     url,
                     wait_for_selector=platform.wait_for_selector,
                     timeout_ms=max(5000, cfg.request_timeout * 1000),
@@ -120,18 +208,79 @@ async def _check_platform(
                     body = rendered.html
                     result.rendered = True
                     result.screenshot_path = rendered.screenshot_path
+                    final_url = getattr(rendered, "final_url", None)
 
             if not result.rendered:
-                status, body, elapsed = await client.get(url, platform.headers)
+                if hasattr(client, "get_with_meta"):
+                    status, body, elapsed, final_url = await client.get_with_meta(
+                        url, platform.headers
+                    )
+                else:
+                    # Test stubs and older clients only expose get(); skip
+                    # final-URL detection in that case.
+                    status, body, elapsed = await client.get(url, platform.headers)
+                    final_url = None
+
+            # Auto-fallback to a headless browser when the aiohttp response
+            # looks like a CDN challenge or empty SPA shell. Only fires when
+            # we didn't already render (i.e., js_heavy=False) and a browser
+            # backend is wired up.
+            if (
+                not result.rendered
+                and body
+                and _selected_browser_available(cfg)
+                and not cfg.no_auto_render
+            ):
+                wall, reason = looks_like_js_wall(body, headers=None, status=status)
+                if wall:
+                    log.debug(
+                        "auto-fallback to browser for %s (reason=%s)",
+                        platform.name,
+                        reason,
+                    )
+                    t0 = time.monotonic()
+                    rendered = await _fetch_rendered_with_backend(
+                        cfg,
+                        url,
+                        wait_for_selector=platform.wait_for_selector,
+                        timeout_ms=max(5000, cfg.request_timeout * 1000),
+                        proxy=cfg.proxy,
+                        screenshot_dir=_screenshot_dir_for(cfg),
+                        screenshot_name=platform.name,
+                    )
+                    elapsed += time.monotonic() - t0
+                    if rendered is not None:
+                        status = rendered.status
+                        body = rendered.html
+                        result.rendered = True
+                        result.screenshot_path = rendered.screenshot_path
+                        final_url = getattr(rendered, "final_url", None) or final_url
+                        result.fp_signals = list(result.fp_signals) + [
+                            f"auto_render:{reason}"
+                        ]
 
             result.http_status = status
-            result.response_time = elapsed
+            result.final_url = final_url if final_url and final_url != url else None
             if platform.check_type == "status":
                 result.exists = status == 200
             elif platform.check_type == "content_absent":
                 result.exists = status == 200 and platform.error_text not in body
             elif platform.check_type == "content_present":
                 result.exists = status == 200 and platform.success_text in body
+
+            # Soft-404 detection via redirect to a URL that doesn't carry the username.
+            # Only applied when the platform didn't already give a definitive signal.
+            redirected_off = _looks_redirected_off(url, final_url, username)
+            if result.exists and redirected_off and platform.check_type == "status":
+                result.exists = False
+                result.status = "soft_404_redirected"
+                result.fp_signals = list(result.fp_signals) + ["redirect_off_target"]
+
+            login_required = result.exists and _looks_login_required(status, body)
+            if login_required:
+                result.exists = False
+                result.confidence = 0.0
+                result.fp_signals = ["login_required"]
 
             # Opportunistic profile parsing: if the upstream socid_extractor
             # recognises this HTML, pull out names/emails/links for free.
@@ -149,9 +298,65 @@ async def _check_platform(
                     http_status=status,
                 )
                 result.confidence = fp.confidence
-                result.fp_signals = list(fp.signals)
+                result.fp_signals = list(result.fp_signals) + list(fp.signals)
+                # Penalise off-target redirects even when content checks passed,
+                # but only as a soft signal here (not a hard exists=False).
+                if redirected_off:
+                    result.confidence = max(0.0, result.confidence - 0.3)
+                    result.fp_signals.append("redirect_off_target")
 
-        result.status = _status_from_http(status, result.exists)
+            # Profile liveness — penalise empty shells (avatar+bio+og absent).
+            # Only judges; never hard-fails. The FP threshold drop happens in
+            # _phase_platform_check based on the recorded score.
+            if result.exists and (body or result.profile_data):
+                liveness = score_liveness(
+                    username=username,
+                    body=body,
+                    profile_data=result.profile_data,
+                )
+                result.is_active_profile = liveness.is_active
+                result.fp_signals = list(result.fp_signals) + [
+                    f"liveness:{liveness.score:.2f}"
+                ] + list(liveness.signals)
+                if not liveness.is_active:
+                    # Pull confidence down so the FP threshold catches it,
+                    # but only by a moderate amount — content-based check_type
+                    # platforms (content_present/content_absent) already
+                    # passed a real signal so we don't want to obliterate them.
+                    penalty = 0.25 if platform.check_type == "status" else 0.15
+                    result.confidence = max(0.0, result.confidence - penalty)
+
+            # Soft-404 fingerprint comparison — uses cached baselines.
+            # Lazily seeds the baseline (fire-and-forget) when first encountering
+            # a status-only platform with no cached fingerprint.
+            if result.exists and body and platform.check_type == "status":
+                cache = _soft_404_cache()
+                baseline = cache.get(platform.name)
+                if baseline is not None:
+                    soft, reason = is_soft_404(
+                        platform=platform.name,
+                        status=status,
+                        body=body,
+                        real_username=username,
+                        baseline=baseline,
+                    )
+                    if soft:
+                        result.exists = False
+                        result.status = "soft_404_template"
+                        if reason:
+                            result.fp_signals = list(result.fp_signals) + [reason]
+                else:
+                    # Kick off a background probe so the next scan benefits.
+                    _track_seed(
+                        asyncio.create_task(
+                            _seed_soft_404_baseline(client, platform)
+                        )
+                    )
+
+        if result.status == "pending":
+            result.status = (
+                "login_required" if login_required else _status_from_http(status, result.exists)
+            )
     except (asyncio.TimeoutError, OSError) as exc:
         log.debug("platform %s errored: %s", platform.name, exc)
         result.status = "error"
@@ -162,14 +367,276 @@ async def _check_platform(
     return result
 
 
+async def _seed_soft_404_baseline(client: HTTPClient, platform: Platform) -> None:
+    """Fire-and-forget probe to populate the soft-404 baseline cache.
+
+    Fetches the platform URL with an impossible username, fingerprints the
+    body, and persists it for the next scan. Runs concurrently with the
+    main sweep so it does not slow the current scan.
+    """
+    try:
+        probe_url = platform.url.replace("{username}", IMPOSSIBLE_USERNAME)
+        if not hasattr(client, "get_with_meta"):
+            return
+        status, body, _elapsed, _final = await client.get_with_meta(
+            probe_url, platform.headers
+        )
+        if not body or status not in (200, 404):
+            return
+        baseline = make_baseline(
+            platform=platform.name,
+            status=status,
+            body=body,
+            probe_username=IMPOSSIBLE_USERNAME,
+        )
+        _soft_404_cache().put(baseline)
+        log.debug("seeded soft-404 baseline for %s", platform.name)
+    except Exception as exc:  # noqa: BLE001 - best-effort background work
+        log.debug("soft-404 seed failed for %s: %s", platform.name, exc)
+
+
+def _looks_redirected_off(
+    requested_url: str, final_url: str | None, username: str
+) -> bool:
+    """Return True when the server redirected us to a URL that doesn't carry
+    the username (typical soft-404: ``/u/xyz`` → ``/explore`` or ``/login``).
+
+    Conservative — only fires when:
+      * final_url is known and differs from requested_url
+      * the username (case-insensitive) is absent from the final URL
+      * the final URL path looks "generic" (root, /login, /explore, /404, /not-found)
+    """
+    if not final_url or final_url == requested_url:
+        return False
+    final_lower = final_url.lower()
+    if username.lower() in final_lower:
+        return False
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(final_lower)
+    except ValueError:
+        return False
+    path = parsed.path.rstrip("/")
+    if not path:
+        return True  # bare host = root redirect
+    suspicious = (
+        "/login", "/signin", "/sign-in", "/explore", "/404", "/not-found",
+        "/error", "/home", "/search", "/discover", "/oops",
+    )
+    return any(path.endswith(s) or s in path for s in suspicious)
+
+
+_HANDLE_PROBE_PLATFORMS: frozenset[str] = frozenset(
+    {
+        "GitHub", "Twitter / X", "Instagram", "Reddit", "TikTok",
+        "YouTube", "LinkedIn", "Telegram", "Steam", "Twitch",
+        "Pinterest", "Medium", "Dev.to", "Keybase", "Mastodon (mastodon.social)",
+        "GitLab", "HackerNews", "StackOverflow", "Quora", "Vimeo",
+    }
+)
+
+
+async def _phase_profile_validate(
+    cfg: ScanConfig, result: ScanResult
+) -> None:
+    """LLM-augmented verdict on borderline-confidence profile matches.
+
+    Only runs when ``cfg.ai_skills`` is on. Sends each platform with a
+    confidence in the uncertain band (0.45 ≤ conf ≤ 0.70) to the
+    ``profile_validator`` skill. The skill's verdict NEVER hard-deletes a
+    match — at worst it lowers confidence below the FP threshold; at best
+    it boosts borderline matches by up to +0.15.
+
+    Synchronous skill calls are wrapped in ``asyncio.to_thread`` so the
+    engine doesn't block on network I/O.
+    """
+    if not cfg.ai_skills:
+        return
+    try:
+        from core.analysis.skill_loader import SkillBudget, SkillError, run_skill
+    except ImportError:
+        log.debug("skill_loader unavailable; skipping profile_validate phase")
+        return
+
+    borderline = [
+        p
+        for p in result.platforms
+        if p.exists and 0.45 <= p.confidence <= 0.70
+    ]
+    if not borderline:
+        return
+
+    budget = SkillBudget(limit=cfg.ai_skill_budget)
+    console.print(
+        f"  [bold yellow][ai][/bold yellow] Profile validation: "
+        f"{len(borderline)} borderline match(es), budget={budget.limit}..."
+    )
+
+    async def _validate_one(p: PlatformResult) -> None:
+        inputs = {
+            "target": {
+                "username": cfg.username,
+                "full_name": cfg.full_name or "",
+                "known_emails": [e.email for e in result.emails][:5],
+                "known_locations": list(result.cross_reference.matched_locations)[:3],
+            },
+            "profile": {
+                "platform": p.platform,
+                "url": p.url,
+                "display_name": p.profile_data.get("name")
+                or p.profile_data.get("display_name", ""),
+                "bio": p.profile_data.get("bio")
+                or p.profile_data.get("description", ""),
+                "location": p.profile_data.get("location", ""),
+                "followers": p.profile_data.get("followers", 0),
+                "linked_accounts": [
+                    p.profile_data.get(k, "")
+                    for k in ("twitter_username", "github_username")
+                    if p.profile_data.get(k)
+                ],
+            },
+        }
+        try:
+            out = await asyncio.to_thread(
+                run_skill, "profile_validator", inputs, budget=budget
+            )
+        except SkillError as exc:
+            log.debug("profile_validator failed for %s: %s", p.platform, exc)
+            return
+        score = int(out.get("match_score", 0))
+        verdict = str(out.get("verdict", "uncertain"))
+        signals = list(out.get("signals", []))
+        red_flags = list(out.get("red_flags", []))
+        # Boost or penalise within a bounded range. Never push to 1.0 or below 0.
+        if verdict in ("match", "likely_match"):
+            delta = 0.10 if verdict == "likely_match" else 0.15
+            p.confidence = min(1.0, p.confidence + delta)
+        elif verdict in ("likely_other", "other"):
+            penalty = 0.20 if verdict == "likely_other" else 0.35
+            p.confidence = max(0.0, p.confidence - penalty)
+        p.fp_signals = list(p.fp_signals) + [
+            f"ai_verdict:{verdict}",
+            f"ai_score:{score}",
+        ]
+        if red_flags:
+            p.fp_signals.append("ai_red_flags:" + ",".join(red_flags[:3]))
+        if signals:
+            p.fp_signals.append("ai_signals:" + "|".join(signals[:3]))
+
+    # Bound parallelism so we don't burst the LLM endpoint.
+    sem = asyncio.Semaphore(4)
+
+    async def _bounded(p: PlatformResult) -> None:
+        async with sem:
+            await _validate_one(p)
+
+    await asyncio.gather(*(_bounded(p) for p in borderline), return_exceptions=True)
+    console.print(
+        f"  [bold green][ai][/bold green] Profile validation: "
+        f"{budget.used}/{budget.limit} LLM calls used"
+    )
+
+
+async def _phase_handle_resolve(
+    client: HTTPClient, cfg: ScanConfig, platforms: list[Platform], result: ScanResult
+) -> ScanConfig:
+    """Resolve a real name into the most likely username via quick probes.
+
+    Triggered when ``cfg.full_name`` is set. Generates candidate handles
+    (deterministic permutations + diacritic folding), probes each against a
+    curated set of high-signal platforms, and returns a new ``ScanConfig``
+    pointing at the best candidate. Findings from the probe phase are
+    folded into ``result.platforms`` so the user sees what we tried.
+
+    The full platform sweep then runs against the chosen handle as usual.
+    """
+    if not cfg.full_name:
+        return cfg
+    from modules.recon.handle_generator import generate as _gen_handles
+
+    candidates = _gen_handles(
+        cfg.full_name,
+        year=cfg.name_year,
+        max_candidates=max(cfg.name_max_handles * 2, 8),
+    )
+    if not candidates:
+        log.debug("handle generator returned nothing for %r", cfg.full_name)
+        return cfg
+
+    # Probe set: high-signal platforms only — we want to spend N×M HTTP
+    # requests, not 1924×N. Pick handles up to name_max_handles after the
+    # quick probe.
+    probe_targets = [p for p in platforms if p.name in _HANDLE_PROBE_PLATFORMS]
+    if not probe_targets:
+        probe_targets = platforms[:20]  # fallback when categories filter is set
+    top_candidates = candidates[: max(cfg.name_max_handles, 3)]
+
+    console.print(
+        f"  [bold yellow][0/8][/bold yellow] Name → handle: probing "
+        f"{len(top_candidates)} candidate(s) on {len(probe_targets)} platforms..."
+    )
+    _emit(
+        "phase_start",
+        phase="handle_resolve",
+        candidates=len(top_candidates),
+        probe_targets=len(probe_targets),
+    )
+
+    scoreboard: list[tuple[str, float, int, list[PlatformResult]]] = []
+    for cand in top_candidates:
+        probe_cfg = replace(cfg, username=cand.handle, full_name=None)
+        probe_tasks = [_check_platform(client, probe_cfg, p) for p in probe_targets]
+        probe_results = await asyncio.gather(*probe_tasks)
+        hits = [r for r in probe_results if r.exists]
+        # Score = sum of confidence × candidate.score so high-likelihood handles
+        # with strong site signals win, but a low-rank handle with multiple solid
+        # hits can also surface.
+        total = sum(r.confidence for r in hits) * (0.5 + 0.5 * cand.score)
+        scoreboard.append((cand.handle, total, len(hits), hits))
+
+    scoreboard.sort(key=lambda row: (row[1], row[2]), reverse=True)
+    best_handle, best_score, best_hit_count, best_hits = scoreboard[0]
+
+    # Persist what we tried so the report shows the resolution.
+    result.discovered_usernames = [row[0] for row in scoreboard if row[2] > 0]
+    result.variations_checked = [c.handle for c in candidates]
+    for r in best_hits:
+        r.status = f"{r.status} (resolved-from-name)"
+        result.platforms.append(r)
+
+    console.print(
+        f"  [bold green][0/8][/bold green] Resolved: [bold]{best_handle}[/bold] "
+        f"(score={best_score:.2f}, {best_hit_count} hits)"
+    )
+    _emit(
+        "phase_end",
+        phase="handle_resolve",
+        chosen=best_handle,
+        score=round(best_score, 2),
+        hits=best_hit_count,
+    )
+
+    return replace(cfg, username=best_handle)
+
+
 def _status_from_http(status: int, exists: bool) -> str:
     if status == 0:
         return "timeout"
     if status == -1:
         return "error"
+    if status in (401, 403):
+        return "login_required"
     if status == 429:
         return "blocked"
     return "found" if exists else "not_found"
+
+
+def _looks_login_required(status: int, body: str) -> bool:
+    if status in (401, 403):
+        return True
+    if status != 200 or not body:
+        return False
+    return any(pattern.search(body) for pattern in _LOGIN_WALL_PATTERNS)
 
 
 async def _deep_scrape(
@@ -386,8 +853,22 @@ async def _phase_email_breach(
         for e in [r.profile_data.get("email")]
         if e and isinstance(e, str) and "@" in e
     ]
+    # Caller-supplied email (via --email-only) is the most authoritative source.
+    if cfg.email_only and cfg.email_only not in known_emails:
+        known_emails.insert(0, cfg.email_only)
 
     email_results = await discover_emails(client, cfg.username, known_emails)
+    # Make sure the explicit --email-only target is always represented in
+    # results even when discover_emails couldn't verify it via Gravatar.
+    if cfg.email_only and not any(er.email == cfg.email_only for er in email_results):
+        email_results.insert(
+            0,
+            EmailResult(
+                email=cfg.email_only,
+                source="user_supplied",
+                verified=True,
+            ),
+        )
 
     if cfg.breach and breach_check_available():
         label = "HIBP + XposedOrNot" if hibp_available() else "XposedOrNot (free)"
@@ -795,6 +1276,33 @@ async def _phase_recon(
     result.leaked_secrets = [s.to_dict() for s in secrets]
 
 
+async def _phase_gitleaks(cfg: ScanConfig, result: ScanResult) -> None:
+    """Optional local Gitleaks scan for caller-provided repo/path targets."""
+    if not cfg.gitleaks_paths:
+        return
+    from modules.recon import gitleaks
+
+    batches = await asyncio.gather(
+        *(
+            gitleaks.scan_path(
+                path,
+                no_git=cfg.gitleaks_no_git,
+                timeout=cfg.gitleaks_timeout,
+            )
+            for path in cfg.gitleaks_paths
+        ),
+        return_exceptions=True,
+    )
+
+    leaked = list(result.leaked_secrets or [])
+    for batch in batches:
+        if isinstance(batch, BaseException):
+            log.debug("gitleaks scan failed: %s", batch)
+            continue
+        leaked.extend(secret.to_dict() for secret in batch)
+    result.leaked_secrets = leaked
+
+
 async def _phase_exif(
     client: HTTPClient,
     cfg: ScanConfig,
@@ -955,11 +1463,40 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
                 "  [yellow]Warning:[/yellow] [bold]HIBP_API_KEY[/bold] not set; breach check will be skipped."
             )
 
-        platform_results = await _phase_platform_check(client, cfg, platforms, result)
+        # Phase 0 (optional): resolve --name to a real username via quick
+        # candidate probes. Mutates cfg.username for the rest of the scan.
+        if cfg.full_name:
+            cfg = await _phase_handle_resolve(client, cfg, platforms, result)
+            result.username = cfg.username
+
+        # --email-only short-circuits the platform sweep: caller already
+        # has an identifier, so we jump straight to the breach/holehe/ghunt
+        # chain. Force the relevant flags on so downstream phases run.
+        if cfg.email_only:
+            cfg = replace(
+                cfg,
+                email=True,
+                breach=True,
+                holehe=True,
+                ghunt=True,
+            )
+            platform_results = []
+            result.platforms = []
+            console.print(
+                f"  [bold cyan][email-only][/bold cyan] Target: {cfg.email_only} "
+                f"— skipping platform sweep, running email pivots only."
+            )
+        else:
+            platform_results = await _phase_platform_check(client, cfg, platforms, result)
 
         _emit("phase_start", phase="deep_scrape")
         await _phase_deep_scrape(client, cfg, platform_results)
         _emit("phase_end", phase="deep_scrape")
+
+        # AI-augmented validation of borderline matches (opt-in via --ai-skills).
+        _emit("phase_start", phase="profile_validate")
+        await _phase_profile_validate(cfg, result)
+        _emit("phase_end", phase="profile_validate")
 
         _emit("phase_start", phase="smart_search")
         await _phase_smart_search(client, cfg, platforms, platform_results, result)
@@ -1020,6 +1557,10 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
             secrets=len(result.leaked_secrets),
         )
 
+        _emit("phase_start", phase="gitleaks")
+        await _phase_gitleaks(cfg, result)
+        _emit("phase_end", phase="gitleaks", secrets=len(result.leaked_secrets))
+
         _emit("phase_start", phase="exif")
         await _phase_exif(client, cfg, result)
         _emit("phase_end", phase="exif", reports=len(result.exif_reports))
@@ -1047,6 +1588,18 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
         _emit("phase_start", phase="intelx")
         await _phase_intelx(client, cfg, result)
         _emit("phase_end", phase="intelx")
+
+        # Drain any in-flight soft-404 baseline seed tasks while the
+        # HTTPClient session is still alive. Short timeout — these are
+        # purely cache-warming and must not block the scan if a site stalls.
+        if _PENDING_SEED_TASKS:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*_PENDING_SEED_TASKS, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                log.debug("soft-404 seed drain timed out; tasks will continue in background")
 
     _emit("phase_start", phase="cross_reference")
     _finalize_cross_reference(result)

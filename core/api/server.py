@@ -43,6 +43,8 @@ _WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 _PUBLIC_PATHS = frozenset({"/", "/health", "/capabilities", "/auth/login", "/docs",
                            "/openapi.json", "/redoc"})
 
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
 
 def _auth_dependency(request: Request) -> None:
     path = request.url.path
@@ -62,6 +64,14 @@ def _auth_dependency(request: Request) -> None:
         payload = auth.decode_token(token, secret=auth.get_secret())
     except auth.AuthError as exc:
         raise HTTPException(status_code=401, detail=f"invalid token: {exc}") from exc
+
+    role = str(payload.get("role") or "viewer")
+    if role not in auth.VALID_ROLES:
+        raise HTTPException(status_code=403, detail="invalid role")
+    if request.method == "DELETE" and role != "admin":
+        raise HTTPException(status_code=403, detail="admin role required")
+    if request.method in _MUTATING_METHODS and role == "viewer":
+        raise HTTPException(status_code=403, detail="viewer role is read-only")
     request.state.user = payload
 
 
@@ -304,12 +314,15 @@ def build_app() -> FastAPI:
     async def create_scan_job(req: ScanRequest, request: Request) -> dict[str, Any]:
         cfg = _cfg_from_request(req)
         store: ScanJobStore = request.app.state.scan_jobs
-        job = store.create_job(
-            cfg,
-            req.model_dump(),
-            save_history=req.save_history,
-            case_id=req.case_id,
-        )
+        try:
+            job = store.create_job(
+                cfg,
+                req.model_dump(),
+                save_history=req.save_history,
+                case_id=req.case_id,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
         return job.to_dict()
 
     @app.get("/scan-jobs")

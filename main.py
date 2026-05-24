@@ -29,6 +29,7 @@ from core.reporter import (
     export_xlsx,
     pdf_available,
     print_banner,
+    print_breach_notice,
     print_results,
     print_scan_start,
     xlsx_available,
@@ -176,7 +177,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--playwright",
         action="store_true",
-        help="Force Playwright for every platform (default: only js_heavy ones)",
+        help="Force the selected browser backend for every platform (default: only js_heavy ones)",
+    )
+    p.add_argument(
+        "--browser-backend",
+        dest="browser_backend",
+        choices=("playwright", "obscura"),
+        default="playwright",
+        help="Browser renderer for JS-heavy pages (default: playwright)",
+    )
+    p.add_argument(
+        "--no-auto-render",
+        dest="no_auto_render",
+        action="store_true",
+        help="Disable automatic browser fallback when aiohttp hits a JS/CDN wall",
     )
     p.add_argument(
         "--screenshots",
@@ -361,6 +375,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--schedule-interval", dest="schedule_interval", type=float, default=60.0,
         help="Minutes between scheduled passes (default 60)",
     )
+    # ── Name / email entrypoints — alternatives to the positional username ──
+    p.add_argument(
+        "--name", dest="name", type=str, default=None,
+        metavar="\"Tam Ad\"",
+        help="Real name → generate candidate handles (Turkish diacritic fold + "
+        "permutations) and run the full sweep against the top-N candidates. "
+        "Works without a positional username.",
+    )
+    p.add_argument(
+        "--name-year", dest="name_year", type=int, default=None,
+        help="Birth/registration year hint for --name (adds year-suffix variants)",
+    )
+    p.add_argument(
+        "--name-max-handles", dest="name_max_handles", type=int, default=8,
+        help="How many top candidate handles to actually scan (default 8)",
+    )
+    p.add_argument(
+        "--email-only", dest="email_only", type=str, default=None,
+        metavar="user@example.com",
+        help="Email-first scan: Gravatar + HIBP + Holehe + GHunt + IntelX. "
+        "Local-part is also fed into the --name handle generator.",
+    )
+    p.add_argument(
+        "--ai-skills", dest="ai_skills", action="store_true",
+        help="Enable LLM-backed augmentation skills (handle generation, "
+        "profile validation). Requires CYBERM4FIA_LLM_API_KEY for NVIDIA NIM.",
+    )
+    p.add_argument(
+        "--ai-skill-budget", dest="ai_skill_budget", type=int, default=20,
+        help="Max LLM calls per scan when --ai-skills is on (default 20)",
+    )
+
     # ── Standalone OSINT pivots (independent of username/redteam flow) ──
     p.add_argument(
         "--bssid", dest="bssid", type=str, default=None,
@@ -402,6 +448,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--intelx-limit", dest="intelx_limit", type=int, default=50,
         help="Cap on IntelX records per search (default 50)",
+    )
+    p.add_argument(
+        "--gitleaks-path",
+        dest="gitleaks_path",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Run optional local Gitleaks secret scan against a repo/path. "
+        "Requires the gitleaks binary.",
+    )
+    p.add_argument(
+        "--gitleaks-no-git",
+        dest="gitleaks_no_git",
+        action="store_true",
+        help="Pass --no-git to Gitleaks for plain directory snapshots",
+    )
+    p.add_argument(
+        "--gitleaks-timeout",
+        dest="gitleaks_timeout",
+        type=int,
+        default=120,
+        help="Seconds before a local Gitleaks scan is cancelled (default 120)",
     )
 
     # ── Red-team recon mode (corporate attack surface, CSV exports only) ──
@@ -1183,9 +1251,19 @@ def main() -> None:
         asyncio.run(_run_bulk_mode(usernames, args, from_watchlist=False))
         return
 
+    # When --name or --email-only is used, a positional username is optional.
+    # We synthesise a placeholder so the rest of the CLI keeps working;
+    # the engine's handle-resolve / email-only phase replaces it before
+    # the platform sweep starts.
     if args.username is None:
-        console.print("[red]Error: please provide a valid username.[/red]")
-        sys.exit(1)
+        if getattr(args, "name", None):
+            args.username = "_name_placeholder_"
+        elif getattr(args, "email_only", None):
+            local = args.email_only.split("@", 1)[0]
+            args.username = sanitize_username(local) or "_email_placeholder_"
+        else:
+            console.print("[red]Error: please provide a valid username (or use --name / --email-only).[/red]")
+            sys.exit(1)
 
     username = sanitize_username(args.username)
     if not username:
@@ -1198,14 +1276,10 @@ def main() -> None:
 
     cfg = ScanConfig.from_args(args, username)
 
-    if cfg.breach and not args.email and not args.full:
-        console.print(
-            "  [yellow]Warning:[/yellow] [bold]--breach[/bold] selected; "
-            "email discovery has been auto-enabled."
-        )
-
     mode_str = " + ".join(cfg.mode_parts()) or "Basic"
     print_banner()
+    if cfg.breach and not args.email and not args.full:
+        print_breach_notice()
     print_scan_start(username, mode_str, get_platform_count())
 
     try:

@@ -20,12 +20,12 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
-MAX_CONCURRENT = _env_int("CYBERM4FIA_MAX_CONCURRENT", 30)
+MAX_CONCURRENT = _env_int("CYBERM4FIA_MAX_CONCURRENT", 50)
 REQUEST_TIMEOUT = _env_int("CYBERM4FIA_TIMEOUT", 15)
 RETRY_COUNT = _env_int("CYBERM4FIA_RETRIES", 2)
 RETRY_DELAY = _env_float("CYBERM4FIA_RETRY_DELAY", 1.0)
 RATE_LIMIT_DELAY = _env_float("CYBERM4FIA_RATE_LIMIT_DELAY", 0.1)
-PER_HOST_CONCURRENCY = _env_int("CYBERM4FIA_PER_HOST_CONCURRENCY", 4)
+PER_HOST_CONCURRENCY = _env_int("CYBERM4FIA_PER_HOST_CONCURRENCY", 6)
 
 
 def _collect_proxy_pool(args) -> tuple[str, ...]:
@@ -118,12 +118,17 @@ class ScanConfig:
     new_circuit_every: int = 0
     tor_control_password: str | None = None
     playwright: bool = False
+    browser_backend: str = "playwright"
+    no_auto_render: bool = False  # opt OUT of auto JS-wall fallback when a browser is available
     screenshots: bool = False
     screenshot_dir: str | None = None
     geocode: bool = False
     redteam_domain: str | None = None
     redteam_names_file: str | None = None
     redteam_github_org: str | None = None
+    gitleaks_paths: tuple[str, ...] = ()
+    gitleaks_no_git: bool = False
+    gitleaks_timeout: int = 120
     exif_image_urls: tuple[str, ...] = ()
     bssid: str | None = None
     ssid: str | None = None
@@ -132,6 +137,12 @@ class ScanConfig:
     harvest_doc_urls: tuple[str, ...] = ()
     intelx_term: str | None = None
     intelx_limit: int = 50
+    full_name: str | None = None  # --name "Tam Ad" → handle generator phase 0
+    name_year: int | None = None  # birth/registration year hint for handle gen
+    name_max_handles: int = 8  # how many candidate handles to actually probe
+    email_only: str | None = None  # --email-only target@example.com
+    ai_skills: bool = False  # opt-in: use LLM-backed skills during scan
+    ai_skill_budget: int = 20  # max LLM calls per scan when ai_skills is on
 
     @classmethod
     def from_args(cls, args, username: str) -> ScanConfig:
@@ -209,6 +220,10 @@ class ScanConfig:
             new_circuit_every=int(getattr(args, "new_circuit_every", 0) or 0),
             tor_control_password=getattr(args, "tor_control_password", None),
             playwright=getattr(args, "playwright", False),
+            browser_backend=(
+                getattr(args, "browser_backend", "playwright") or "playwright"
+            ),
+            no_auto_render=bool(getattr(args, "no_auto_render", False)),
             screenshots=getattr(args, "screenshots", False),
             screenshot_dir=getattr(args, "screenshot_dir", None),
             geocode=getattr(args, "geocode", False),
@@ -219,6 +234,13 @@ class ScanConfig:
             redteam_domain=(getattr(args, "redteam_domain", None) or None),
             redteam_names_file=(getattr(args, "redteam_names_file", None) or None),
             redteam_github_org=(getattr(args, "redteam_github_org", None) or None),
+            gitleaks_paths=tuple(
+                p.strip()
+                for p in (getattr(args, "gitleaks_path", None) or [])
+                if p and p.strip()
+            ),
+            gitleaks_no_git=bool(getattr(args, "gitleaks_no_git", False)),
+            gitleaks_timeout=int(getattr(args, "gitleaks_timeout", 120) or 120),
             exif_image_urls=tuple(
                 u.strip()
                 for u in (getattr(args, "exif_url", None) or [])
@@ -235,6 +257,14 @@ class ScanConfig:
             ),
             intelx_term=(getattr(args, "intelx", None) or None),
             intelx_limit=int(getattr(args, "intelx_limit", 50) or 50),
+            full_name=(getattr(args, "name", None) or None),
+            name_year=(getattr(args, "name_year", None) or None),
+            name_max_handles=int(getattr(args, "name_max_handles", 8) or 8),
+            email_only=(getattr(args, "email_only", None) or None),
+            ai_skills=bool(getattr(args, "ai_skills", False)),
+            ai_skill_budget=int(
+                getattr(args, "ai_skill_budget", 20) or 20
+            ),
         )
 
     def mode_parts(self) -> list[str]:
@@ -262,8 +292,10 @@ class ScanConfig:
             (bool(self.company_query), "Company"),
             (bool(self.harvest_doc_urls), "DocMeta"),
             (bool(self.intelx_term), "IntelX"),
+            (bool(self.gitleaks_paths), "GitLeaks"),
             (bool(self.redteam_domain), "Redteam"),
             (self.enrichment, "Enrichment"),
+            (self.browser_backend == "obscura", "Obscura"),
             (self.tor, "Tor"),
         ]
         for flag, label in mapping:

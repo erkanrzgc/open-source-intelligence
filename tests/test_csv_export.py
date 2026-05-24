@@ -103,6 +103,7 @@ def test_export_csv_writes_zip_bundle(tmp_path: Path) -> None:
         github_row = next(row for row in platforms if row[0] == "GitHub")
         assert github_row[3] == "true"  # exists
         assert github_row[4] == "found"
+        assert all(row[0] != "Twitter" for row in platforms[1:])
 
         emails = _read_csv(zf, "emails.csv")
         assert emails[1][0] == "alice@example.com"
@@ -144,5 +145,5 @@ def test_export_xlsx_writes_one_sheet_per_section(tmp_path: Path) -> None:
     platforms = wb["platforms"]
     header = [c.value for c in platforms[1]]
     assert header[:3] == ["platform", "category", "url"]
-    # Two data rows (GitHub + Twitter).
-    assert platforms.max_row == 3
+    # One data row; not_found/login_required platforms stay out of exports.
+    assert platforms.max_row == 2

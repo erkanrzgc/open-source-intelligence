@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import os
 import time
 from collections import defaultdict
 from urllib.parse import urlparse
@@ -35,6 +36,10 @@ from modules.stealth.tor_control import CircuitRotator
 log = get_logger(__name__)
 
 
+def _env_truthy(key: str) -> bool:
+    return os.environ.get(key, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class HTTPClient:
     def __init__(
         self,
@@ -47,6 +52,7 @@ class HTTPClient:
         rate_bucket: DomainRateBucket | None = None,
         new_circuit_every: int = 0,
         tor_control_password: str | None = None,
+        verify_tls: bool | None = None,
     ) -> None:
         if tor:
             self.proxies = ["socks5://127.0.0.1:9050"]
@@ -66,6 +72,11 @@ class HTTPClient:
         self._session: aiohttp.ClientSession | None = None
         self._request_timeout = request_timeout or REQUEST_TIMEOUT
         self._fingerprint = fingerprint
+        self._verify_tls = (
+            not _env_truthy("CYBERM4FIA_INSECURE_TLS")
+            if verify_tls is None
+            else verify_tls
+        )
         self._rate_bucket = rate_bucket if rate_bucket is not None else DomainRateBucket()
         self._rotator: CircuitRotator | None = (
             CircuitRotator(every=new_circuit_every, password=tor_control_password)
@@ -85,7 +96,11 @@ class HTTPClient:
                 ) from exc
             connector: aiohttp.BaseConnector = ProxyConnector.from_url(self.proxies[0])
         else:
-            connector = aiohttp.TCPConnector(limit=MAX_CONCURRENT, ssl=False)
+            connector = (
+                aiohttp.TCPConnector(limit=MAX_CONCURRENT)
+                if self._verify_tls
+                else aiohttp.TCPConnector(limit=MAX_CONCURRENT, ssl=False)
+            )
         self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
         return self
 
@@ -171,6 +186,34 @@ class HTTPClient:
         headers: dict | None = None,
         allow_redirects: bool = True,
     ) -> tuple[int, str, float]:
+        status, body, elapsed, _ = await self._get_internal(
+            url, headers, allow_redirects=allow_redirects
+        )
+        return status, body, elapsed
+
+    async def get_with_meta(
+        self,
+        url: str,
+        headers: dict | None = None,
+        allow_redirects: bool = True,
+    ) -> tuple[int, str, float, str | None]:
+        """Same as :meth:`get` but also returns the final URL after redirects.
+
+        ``final_url`` is the request URL post-redirect-chain; on the no-redirect
+        path it equals the original URL. Returns ``None`` if the request errored
+        before the response was received.
+        """
+        return await self._get_internal(
+            url, headers, allow_redirects=allow_redirects
+        )
+
+    async def _get_internal(
+        self,
+        url: str,
+        headers: dict | None,
+        *,
+        allow_redirects: bool,
+    ) -> tuple[int, str, float, str | None]:
         session = self._require_session()
         merged = self._headers(headers)
         global_lock, host_lock = await self._acquire(url)
@@ -189,21 +232,21 @@ class HTTPClient:
                         body = await resp.text(errors="replace")
                         await self._post_request(url, resp.status, resp)
                         self._record_proxy_result(proxy, success=True)
-                        return resp.status, body, elapsed
+                        return resp.status, body, elapsed, str(resp.url)
                 except asyncio.TimeoutError:
                     elapsed = time.monotonic() - start
                     log.debug("timeout on %s (attempt %d)", url, attempt + 1)
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
-                        return 0, "", elapsed
+                        return 0, "", elapsed, None
                 except (aiohttp.ClientError, OSError) as exc:
                     elapsed = time.monotonic() - start
                     log.debug("network error on %s: %s", url, exc)
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
-                        return -1, "", elapsed
+                        return -1, "", elapsed, None
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
-            return -1, "", 0.0
+            return -1, "", 0.0, None
         finally:
             host_lock.release()
             global_lock.release()

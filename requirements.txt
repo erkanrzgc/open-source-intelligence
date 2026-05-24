@@ -9,6 +9,7 @@ PyYAML>=6.0
 #   --dns / --subdomain     -> dnspython
 #   --tor / --proxy socks5  -> aiohttp-socks
 #   --breach / --hibp       -> HIBP_API_KEY env var (no extra package)
+#   --harvest-doc           -> magika (optional stronger file-type detection)
 python-whois>=0.9.0
 imagehash>=4.3.0
 Pillow>=10.0.0

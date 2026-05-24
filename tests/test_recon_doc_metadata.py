@@ -8,7 +8,6 @@ which metadata fields the parser should see.
 from __future__ import annotations
 
 import io
-import re
 import zipfile
 
 import pytest
@@ -22,8 +21,8 @@ from modules.recon.doc_metadata import (
     _parse_docx,
     _parse_pdf,
 )
+from modules.recon.filetype import FileTypeDetection
 from modules.recon.models import DocumentMetadata
-
 
 # ── Format detection ────────────────────────────────────────────────
 
@@ -178,6 +177,57 @@ async def test_extract_from_url_routes_to_docx_parser() -> None:
     assert meta.format == "docx"
     assert meta.author == "eve"
     assert meta.company == "Foo"
+
+
+@pytest.mark.asyncio
+async def test_extract_from_url_attaches_magika_detection(monkeypatch) -> None:
+    blob = _build_minimal_pdf({"/Author": "dora", "/Title": "X"})
+    monkeypatch.setattr(
+        doc_metadata.filetype,
+        "identify_bytes",
+        lambda data: FileTypeDetection(
+            label="pdf",
+            description="PDF document",
+            mime_type="application/pdf",
+            group="document",
+            score=0.99,
+        ),
+    )
+    with aioresponses() as m:
+        m.get("https://t.example/file.pdf", body=blob, content_type="application/pdf")
+        async with HTTPClient() as client:
+            meta = await doc_metadata.extract_from_url(
+                client, "https://t.example/file.pdf"
+            )
+    assert meta is not None
+    assert meta.raw["detected_label"] == "pdf"
+    assert meta.raw["detected_score"] == 0.99
+
+
+@pytest.mark.asyncio
+async def test_extract_from_url_reports_spoofed_document(monkeypatch) -> None:
+    monkeypatch.setattr(
+        doc_metadata.filetype,
+        "identify_bytes",
+        lambda data: FileTypeDetection(
+            label="html",
+            description="HTML document",
+            mime_type="text/html",
+            group="text",
+            score=0.98,
+            is_text=True,
+        ),
+    )
+    with aioresponses() as m:
+        m.get("https://t.example/invoice.pdf", body=b"<html>login</html>")
+        async with HTTPClient() as client:
+            meta = await doc_metadata.extract_from_url(
+                client, "https://t.example/invoice.pdf"
+            )
+    assert meta is not None
+    assert meta.format == "html"
+    assert meta.raw["unsupported_document_payload"] is True
+    assert meta.raw["detected_mime_type"] == "text/html"
 
 
 @pytest.mark.asyncio

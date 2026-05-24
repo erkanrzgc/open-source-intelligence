@@ -54,7 +54,7 @@ DEFAULT_HTTP_URL = os.environ.get(
     "https://integrate.api.nvidia.com/v1/chat/completions",
 )
 DEFAULT_HTTP_MODEL = os.environ.get(
-    "CYBERM4FIA_LLM_MODEL", "meta/llama-3.3-70b-instruct"
+    "CYBERM4FIA_LLM_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct"
 )
 DEFAULT_HTTP_API_KEY = os.environ.get("CYBERM4FIA_LLM_API_KEY", "")
 DEFAULT_HTTP_TIMEOUT = float(os.environ.get("CYBERM4FIA_LLM_TIMEOUT", "120"))

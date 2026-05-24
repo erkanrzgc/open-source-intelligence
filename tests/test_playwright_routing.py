@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from core import engine as engine_mod
@@ -11,7 +9,6 @@ from core.config import ScanConfig
 from core.engine import _check_platform, _screenshot_dir_for, _should_render
 from core.platform_loader import Platform
 from modules.stealth import playwright_fallback as pw_mod
-
 
 JS_HEAVY = Platform(
     name="Instagram",
@@ -64,6 +61,22 @@ def test_should_render_skips_json_api(monkeypatch):
     assert _should_render(JSON_API, cfg) is False
 
 
+def test_should_render_uses_obscura_backend(monkeypatch):
+    monkeypatch.setattr(
+        engine_mod.obscura_fallback, "is_available", lambda: True
+    )
+    cfg = ScanConfig(username="alice", browser_backend="obscura")
+    assert _should_render(JS_HEAVY, cfg) is True
+
+
+def test_should_render_false_when_obscura_missing(monkeypatch):
+    monkeypatch.setattr(
+        engine_mod.obscura_fallback, "is_available", lambda: False
+    )
+    cfg = ScanConfig(username="alice", browser_backend="obscura")
+    assert _should_render(JS_HEAVY, cfg) is False
+
+
 def test_screenshot_dir_off_by_default():
     cfg = ScanConfig(username="alice")
     assert _screenshot_dir_for(cfg) is None
@@ -97,7 +110,7 @@ async def test_check_platform_uses_playwright_for_js_heavy(monkeypatch, tmp_path
         return pw_mod.RenderedPage(
             url=url,
             status=200,
-            html=f"<html><body>hello alice</body></html>",
+            html="<html><body>hello alice</body></html>",
             final_url=url,
             screenshot_path=str(tmp_path / "alice" / "Instagram.png"),
         )
@@ -144,6 +157,41 @@ async def test_check_platform_falls_back_to_aiohttp_when_render_fails(monkeypatc
     assert result.rendered is False
     assert result.screenshot_path is None
     assert result.http_status == 200
+
+
+@pytest.mark.asyncio
+async def test_check_platform_uses_obscura_backend(monkeypatch):
+    monkeypatch.setattr(
+        engine_mod.obscura_fallback, "is_available", lambda: True
+    )
+
+    class _Client:
+        async def get(self, *a, **kw):  # pragma: no cover - should not be called
+            raise AssertionError("aiohttp path must not run when obscura renders")
+
+        async def get_json(self, *a, **kw):  # pragma: no cover
+            raise AssertionError
+
+    calls: dict = {}
+
+    async def fake_fetch(url, **kwargs):
+        calls["url"] = url
+        calls["kwargs"] = kwargs
+        return pw_mod.RenderedPage(
+            url=url,
+            status=200,
+            html="<html><body>alice</body></html>",
+            final_url=url,
+        )
+
+    monkeypatch.setattr(engine_mod.obscura_fallback, "fetch_rendered", fake_fetch)
+
+    cfg = ScanConfig(username="alice", browser_backend="obscura")
+    result = await _check_platform(_Client(), cfg, JS_HEAVY)
+
+    assert result.rendered is True
+    assert result.exists is True
+    assert calls["url"] == "https://www.instagram.com/alice/"
 
 
 def test_rendered_page_exposes_screenshot_path():

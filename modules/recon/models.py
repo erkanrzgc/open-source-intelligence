@@ -187,6 +187,48 @@ class DocumentMetadata:
 
 
 @dataclass(frozen=True)
+class CertificateRecord:
+    """A Certificate Transparency log entry pulled from crt.sh.
+
+    The subdomain enumerator already mines ``name_value`` from these
+    records to discover hostnames. This richer view keeps the issuing
+    CA, validity window, and CT entry timestamp so callers can pivot
+    on the metadata itself: a recently-issued LE cert points at new
+    infra coming online, a cert whose ``not_after`` has passed but
+    whose hostname still resolves points at forgotten services, and
+    tracking the dominant issuer per-org reveals procurement choices
+    a defender would prefer to keep quiet.
+
+    ``name_value`` keeps the full Subject-Alt-Name list (lower-cased,
+    deduped) instead of collapsing to one host. ``url`` points at the
+    crt.sh detail page so an analyst can verify the entry by hand.
+    """
+
+    common_name: str
+    name_value: tuple[str, ...]
+    issuer_name: str
+    not_before: str
+    not_after: str
+    entry_timestamp: str
+    serial_number: str
+    crtsh_id: str = ""
+    url: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "common_name": self.common_name,
+            "name_value": list(self.name_value),
+            "issuer_name": self.issuer_name,
+            "not_before": self.not_before,
+            "not_after": self.not_after,
+            "entry_timestamp": self.entry_timestamp,
+            "serial_number": self.serial_number,
+            "crtsh_id": self.crtsh_id,
+            "url": self.url,
+        }
+
+
+@dataclass(frozen=True)
 class LeakedSecret:
     """A credential-shaped string surfaced from public source code.
 

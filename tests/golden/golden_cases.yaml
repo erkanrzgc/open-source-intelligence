@@ -1,0 +1,98 @@
+# Golden-set fixtures for engine regression tests.
+#
+# Each case is fully synthetic — no network access — and exercises one
+# end-to-end behaviour: soft-404 rejection, liveness penalty, FP filter
+# threshold, redirect-off-target, etc.
+#
+# The runner builds a fake HTTP client from `response` and asserts that
+# the resulting PlatformResult matches `expect`.
+#
+# Field reference
+#   case_name        unique identifier (string)
+#   username         target handle
+#   platform_name    name string from platforms.yaml
+#   platform_url     URL template (uses {username})
+#   check_type       status | content_absent | content_present
+#   error_text       only when check_type=content_absent
+#   success_text     only when check_type=content_present
+#   response.status  HTTP status
+#   response.body    response body to feed _check_platform
+#   response.final_url  optional redirect target
+#   expect.exists    bool
+#   expect.confidence_at_least  float (optional lower bound)
+#   expect.signals_include      list of substrings each fp_signal must contain
+#   expect.status_contains      substring the result.status must include
+
+cases:
+  - case_name: real_profile_high_confidence
+    username: erkanrzgic
+    platform_name: ExampleSocialReal
+    platform_url: "https://example.social/{username}"
+    check_type: status
+    response:
+      status: 200
+      body: |
+        <html><head>
+          <title>erkanrzgic — Example Social</title>
+          <meta property="og:title" content="erkanrzgic on Example Social" />
+          <link rel="canonical" href="https://example.social/erkanrzgic" />
+        </head><body>
+          <h1>erkanrzgic</h1>
+          <img class="avatar" src="https://cdn.example.social/u/erkanrzgic.jpg" />
+          <p>Bio: OSINT engineer based in Istanbul. 1240 followers, 87 posts.</p>
+          <article>Recent activity log full of content...</article>
+        </body></html>
+    expect:
+      exists: true
+      confidence_at_least: 0.85
+      signals_include:
+        - title
+        - canonical
+
+  - case_name: soft_404_redirect_to_explore
+    username: ghost_user
+    platform_name: ExampleSiteRedirect
+    platform_url: "https://example.com/{username}"
+    check_type: status
+    response:
+      status: 200
+      body: "<html><body>Discover popular profiles</body></html>"
+      final_url: "https://example.com/explore"
+    expect:
+      exists: false
+      status_contains: soft_404
+      signals_include:
+        - redirect_off_target
+
+  - case_name: empty_shell_low_confidence
+    username: lonely
+    platform_name: ExampleShellSite
+    platform_url: "https://shell.example/{username}"
+    check_type: status
+    response:
+      status: 200
+      body: |
+        <html><body>
+          <p>Welcome to your new profile! Click here to add a bio.</p>
+        </body></html>
+    expect:
+      # Single-platform _check_platform leaves exists=True; the FP phase
+      # below the threshold drops it. We assert the confidence is well
+      # below the default 0.45 threshold so the phase WILL drop it.
+      exists: true
+      confidence_at_most: 0.20
+      signals_include:
+        - liveness
+
+  - case_name: content_absent_user_not_found
+    username: ghostuser
+    platform_name: ExampleAbsentSite
+    platform_url: "https://absent.example/{username}"
+    check_type: content_absent
+    error_text: "Sorry, we couldn't find that user"
+    response:
+      status: 200
+      body: "<html><body><p>Sorry, we couldn't find that user named ghostuser.</p></body></html>"
+    expect:
+      exists: false
+      status_contains: not_found

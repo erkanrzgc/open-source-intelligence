@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from io import BytesIO
 
@@ -19,6 +20,25 @@ except ImportError:
     log.debug("imagehash/Pillow not installed; falling back to md5 comparison")
 
 
+def _hash_bytes(data: bytes) -> dict:
+    """CPU-bound: decode image and compute perceptual hashes. Called via to_thread."""
+    out: dict = {
+        "md5": hashlib.md5(data, usedforsecurity=False).hexdigest(),
+        "size": len(data),
+    }
+    if not _HAS_IMAGEHASH:
+        return out
+    try:
+        img = Image.open(BytesIO(data)).convert("RGB")
+        out["phash"] = str(imagehash.phash(img))
+        out["dhash"] = str(imagehash.dhash(img))
+        out["width"] = img.width
+        out["height"] = img.height
+    except (OSError, ValueError) as exc:
+        log.debug("image decode failed: %s", exc)
+    return out
+
+
 async def fetch_and_hash(client: HTTPClient, url: str) -> dict | None:
     if not url or not url.startswith(("http://", "https://")):
         return None
@@ -27,20 +47,10 @@ async def fetch_and_hash(client: HTTPClient, url: str) -> dict | None:
     if status != 200 or not data:
         return None
 
-    md5 = hashlib.md5(data, usedforsecurity=False).hexdigest()
-    result = {"url": url, "md5": md5, "size": len(data)}
-
-    if _HAS_IMAGEHASH:
-        try:
-            img = Image.open(BytesIO(data)).convert("RGB")
-            result["phash"] = str(imagehash.phash(img))
-            result["dhash"] = str(imagehash.dhash(img))
-            result["width"] = img.width
-            result["height"] = img.height
-        except (OSError, ValueError) as exc:
-            log.debug("image decode failed for %s: %s", url, exc)
-
-    return result
+    # Offload CPU-bound decode+hash to a worker thread so the event loop
+    # keeps issuing HTTP requests while images are being processed.
+    hashed = await asyncio.to_thread(_hash_bytes, data)
+    return {"url": url, **hashed}
 
 
 def compare_phashes(h1: str, h2: str) -> float:
@@ -65,10 +75,13 @@ async def compare_profile_photos(
     if len(photo_urls) < 2:
         return []
 
-    hash_results = []
-    for platform, url in photo_urls:
-        h = await fetch_and_hash(client, url)
-        if h:
+    fetched = await asyncio.gather(
+        *(fetch_and_hash(client, url) for _, url in photo_urls),
+        return_exceptions=True,
+    )
+    hash_results: list[tuple[str, dict]] = []
+    for (platform, _url), h in zip(photo_urls, fetched, strict=True):
+        if isinstance(h, dict):
             hash_results.append((platform, h))
 
     matches = []

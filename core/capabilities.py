@@ -18,6 +18,9 @@ from modules.holehe_check import is_available as holehe_available
 from modules.holehe_check import module_count as holehe_module_count
 from modules.photo_compare import imagehash_available
 from modules.profile_extract import is_available as profile_extract_available
+from modules.recon import filetype as filetype_detector
+from modules.recon import gitleaks
+from modules.stealth import obscura_fallback
 from modules.stealth.playwright_fallback import AVAILABLE as PLAYWRIGHT_AVAILABLE
 from modules.toutatis_lookup import is_available as toutatis_available
 
@@ -67,6 +70,7 @@ def collect_capabilities() -> dict[str, dict[str, Any]]:
     censys_ok = _env_enabled("CENSYS_API_ID") and _env_enabled("CENSYS_API_SECRET")
     fofa_ok = _env_enabled("FOFA_EMAIL") and _env_enabled("FOFA_KEY")
     zoomeye_ok = _env_enabled("ZOOMEYE_API_KEY")
+    gitleaks_ok = gitleaks.is_available()
     llama_cpp_installed = _has_module("llama_cpp")
     llm_model_path = Path(
         os.environ.get(
@@ -151,6 +155,26 @@ def collect_capabilities() -> dict[str, dict[str, Any]]:
         "playwright": _capability(
             available=PLAYWRIGHT_AVAILABLE,
             reason="" if PLAYWRIGHT_AVAILABLE else "playwright extra is not installed",
+        ),
+        "obscura": _capability(
+            available=obscura_fallback.is_available(),
+            reason=(
+                ""
+                if obscura_fallback.is_available()
+                else "obscura binary not found; set CYBERM4FIA_OBSCURA_BIN or install obscura"
+            ),
+        ),
+        "filetype_magika": _capability(
+            available=filetype_detector.is_available(),
+            reason="" if filetype_detector.is_available() else "magika extra is not installed",
+        ),
+        "gitleaks": _capability(
+            available=gitleaks_ok,
+            reason=(
+                ""
+                if gitleaks_ok
+                else "gitleaks binary not found; set CYBERM4FIA_GITLEAKS_BIN or install gitleaks"
+            ),
         ),
         "tor_transport": _capability(
             available=tor_transport,
@@ -239,8 +263,14 @@ def collect_scan_warnings(
         warnings.append(
             "IG_SESSION_ID not set; Toutatis will run in public-only mode with reduced Instagram detail."
         )
-    if cfg.playwright and not caps["playwright"]["ready"]:
+    if cfg.browser_backend == "obscura" and not caps["obscura"]["ready"]:
+        warnings.append("Obscura is not available; browser-rendered fallback checks will be skipped.")
+    elif cfg.playwright and not caps["playwright"]["ready"]:
         warnings.append("Playwright is not available; browser-rendered fallback checks will be skipped.")
+    if cfg.harvest_doc_urls and not caps["filetype_magika"]["ready"]:
+        warnings.append("Magika is not available; document harvesting will rely on magic-byte detection only.")
+    if cfg.gitleaks_paths and not caps["gitleaks"]["ready"]:
+        warnings.append("Gitleaks is not available; local secret scans will be skipped.")
     if cfg.tor and not caps["tor_transport"]["ready"]:
         warnings.append("Tor/SOCKS transport is not available; install `aiohttp-socks` before using proxy routing.")
     if cfg.new_circuit_every and cfg.tor and not caps["tor_control"]["ready"]:

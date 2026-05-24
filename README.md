@@ -82,8 +82,19 @@ pip install -e '.[toutatis]'  # Instagram profile OSINT
 pip install -e '.[socks]'     # SOCKS / Tor support (aiohttp-socks)
 pip install -e '.[api]'       # FastAPI REST server + web UI
 pip install -e '.[report]'    # PDF/XLSX report exporters
+pip install -e '.[browser]'   # Playwright browser fallback
+pip install -e '.[filetype]'  # Magika file-type detection for harvested docs
 pip install -e '.[dev]'       # pytest, ruff, mypy, coverage
 ```
+
+Obscura can be used as an alternative browser renderer by installing the
+`obscura` binary and running:
+
+```bash
+cyberm4fia johndoe --browser-backend obscura
+```
+
+Set `CYBERM4FIA_OBSCURA_BIN=/path/to/obscura` if the binary is not on `$PATH`.
 
 ---
 
@@ -205,6 +216,7 @@ cyberm4fia johndoe --ai
 | `--category` | `-c` | Restrict to categories (`social,dev,gaming,...`) |
 | `--tor` | `-toor` | Route through `socks5://127.0.0.1:9050` |
 | `--proxy` | — | Custom HTTP/SOCKS proxy |
+| `--browser-backend` | — | Browser renderer for JS-heavy pages: `playwright` or `obscura` |
 | `--output` | `-o` | Save report to `.json`, `.html`, or `.dot` |
 | `--timeout` | `-t` | Per-request timeout (seconds) |
 | `--history` | — | List prior scans for the username and exit |
@@ -265,6 +277,13 @@ outside localhost, enable the auth gate first:
 docker compose run --rm cli --create-user analyst:change-me
 OSINT_AUTH_REQUIRED=1 OSINT_AUTH_SECRET="$(openssl rand -hex 32)" docker compose up api
 ```
+
+API auth roles are enforced when `OSINT_AUTH_REQUIRED=1`: `viewer` is
+read-only, `analyst` can create/update, and `admin` is required for deletes.
+Background scan jobs are bounded by `CYBERM4FIA_SCAN_JOB_MAX_JOBS`,
+`CYBERM4FIA_SCAN_JOB_CONCURRENCY`, and `CYBERM4FIA_SCAN_JOB_MAX_EVENTS`.
+TLS verification is on by default; only set `CYBERM4FIA_INSECURE_TLS=1` for
+controlled lab targets with broken certificates.
 
 ---
 
