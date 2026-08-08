@@ -804,6 +804,8 @@ def _extract_avatar_urls(platforms: list[PlatformResult]) -> list[tuple[str, str
 
 def _select_platforms(categories: tuple[str, ...] | None) -> list[Platform]:
     if not categories:
+        return _verified_platforms()
+    if categories == ("__all__",):
         return list(PLATFORMS)
     if categories == ("__popular__",):
         return _popular_platforms()
@@ -812,23 +814,31 @@ def _select_platforms(categories: tuple[str, ...] | None) -> list[Platform]:
     return [p for p in PLATFORMS if p.category in categories]
 
 
+_VERIFIED_CACHE: list[Platform] | None = None
+
+
 def _verified_platforms() -> list[Platform]:
-    """Return platforms with maigret-verified detection signals (absence/presence strings
-    or API probe endpoints). These produce far fewer false positives than bare status-only
-    platforms."""
+    """Return platforms with maigret-verified detection signals (2+ of absenceStrs,
+    presenseStrs, urlProbe). ~450 platforms, near-zero fake positives."""
+    global _VERIFIED_CACHE
+    if _VERIFIED_CACHE is not None:
+        return _VERIFIED_CACHE
     verified = set()
     try:
         import json
         data = json.loads(
-            Path("/tmp/maigret_data.json").read_text(encoding="utf-8")
+            _MAIGRET_PATH.read_text(encoding="utf-8")
         )["sites"]
         for name, d in data.items():
-            if d.get("absenceStrs") or d.get("presenseStrs") or d.get("urlProbe"):
+            has_absence = bool(d.get("absenceStrs"))
+            has_presence = bool(d.get("presenseStrs"))
+            has_probe = bool(d.get("urlProbe"))
+            if (has_absence and has_presence) or (has_presence and has_probe) or (has_absence and has_probe):
                 verified.add(name.lower().strip().rstrip("."))
     except Exception:
         pass
     if not verified:
-        return _popular_platforms()  # fallback
+        return _popular_platforms()
     from difflib import SequenceMatcher
     result = []
     for p in PLATFORMS:
@@ -841,6 +851,7 @@ def _verified_platforms() -> list[Platform]:
                 result.append(p)
                 break
     log.debug("verified platforms: %d out of %d", len(result), len(PLATFORMS))
+    _VERIFIED_CACHE = result
     return result
 
 

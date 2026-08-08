@@ -42,7 +42,22 @@ class TestStatusFromHttp:
 
 class TestSelectPlatforms:
     def test_all_when_none(self):
-        assert len(_select_platforms(None)) == len(PLATFORMS)
+        from core import engine as eng
+        eng._VERIFIED_CACHE = None
+        result = _select_platforms(None)
+        assert len(result) > 0
+        assert len(result) < len(PLATFORMS)
+
+    def test_all_when_explicit(self):
+        result = _select_platforms(("__all__",))
+        assert len(result) == len(PLATFORMS)
+
+    def test_verified_when_requested(self):
+        from core import engine as eng
+        eng._VERIFIED_CACHE = None
+        result = _select_platforms(("__verified__",))
+        assert len(result) > 0
+        assert len(result) < len(PLATFORMS)
 
     def test_filter_by_category(self):
         result = _select_platforms(("dev",))

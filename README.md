@@ -2,13 +2,13 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python" alt="Python">
-  <img src="https://img.shields.io/badge/platforms-791-purple?style=flat-square" alt="Platforms">
+  <img src="https://img.shields.io/badge/platforms-~500-purple?style=flat-square" alt="Platforms">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/tests-809%20passed-success?style=flat-square" alt="Tests">
 </p>
 
 <p align="center">
-  <strong>Username reconnaissance — AI-powered, zero false positives.</strong><br>
+  <strong>Username reconnaissance across ~500 platforms — AI-powered.</strong><br>
   Email breach discovery • smart username variations • post-verify AI
 </p>
 
@@ -26,16 +26,18 @@ python osint.py      # or just: osint
 ```
 ╭──────────────────────────────────────────────╮
 │ Open Source Intelligence — username scanner  │
-│ 791 platforms · AI validation                │
+│ ~500 platforms · AI validation               │
 ╰──────────────────────────────────────────────╯
 
+Username: erkanrzgc
 
-[1] Quick  — 791 platforms, AI validation
+[1] Quick  — ~500 platforms
 [2] Full   — all 1924 platforms
+[3] Custom — pick categories yourself
 
 Choose: 1
 
-→ Scanning 791 platforms...
+→ Scanning ~500 platforms...
 → AI validating matches...
 → Verifying 15 matches...
   Real: 7  Fake: 8
@@ -59,7 +61,7 @@ osint scan erkanrzgc
 
 | Phase | Description |
 |-------|-------------|
-| Platform sweep | Checks 791 platforms in parallel for the username |
+| Platform sweep | Checks ~500 platforms in parallel for the username |
 | AI validation | LLM evaluates borderline matches, reduces false positives |
 | Deep scrape | Extracts names, bios, locations from known platforms |
 | Smart search | Generates username variations (john → j0hn, johndoe42) |
@@ -73,8 +75,9 @@ osint scan erkanrzgc
 
 ```bash
 osint                          # interactive mode
-osint scan <username>          # one-liner
-osint scan <username> --smart     # username variations
+osint scan <username>          # one-liner, ~500 platforms
+osint scan <username> --full   # all 1924 platforms
+osint scan <username> --smart  # username variations
 osint scan <username> --full-name "John Doe"  # name → handle resolution
 ```
 

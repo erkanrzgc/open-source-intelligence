@@ -129,6 +129,9 @@ def _pick_categories() -> tuple[str, ...] | None:
 
 def _selected_platforms(categories: tuple[str, ...] | None) -> list:
     if not categories:
+        from core.engine import _verified_platforms
+        return _verified_platforms()
+    if categories == ("__all__",):
         return list(PLATFORMS)
     if categories in (("__popular__",), ("__verified__",)):
         from core.engine import _select_platforms
@@ -242,7 +245,7 @@ async def _ai_verify_page(analyzer, username: str, platform: str, url: str, html
 async def _interactive() -> int:
     console.print(Panel(
         "[bold blue]Open Source Intelligence[/bold blue] — username scanner\n"
-        "791 platforms · email breach · AI validation",
+        "~500 platforms · email breach · AI validation",
         border_style="blue",
     ))
     console.print()
@@ -254,7 +257,7 @@ async def _interactive() -> int:
 
     console.print()
     console.print("[bold]Scan type:[/bold]")
-    console.print("  [1] Quick     — 791 platforms, AI validation")
+    console.print("  [1] Quick     — default platforms (~500)")
     console.print("  [2] Full      — all 1924 platforms")
     console.print("  [3] Custom    — pick everything yourself")
     console.print()
@@ -266,14 +269,13 @@ async def _interactive() -> int:
     full_name: str | None = None
 
     if choice == "1":
-        categories = ("__verified__",)
-    elif choice == "2":
         categories = None
+    elif choice == "2":
+        categories = ("__all__",)
     elif choice == "3":
         cats_raw = _pick_categories()
         if cats_raw is None:
-            use_verified = Confirm.ask("Verified platforms only? (~791, recommended)", default=True)
-            categories = ("__verified__",) if use_verified else None
+            categories = None
         else:
             categories = cats_raw
         smart = Confirm.ask("Smart search? (username variations, finds aliases)", default=True)
@@ -351,7 +353,8 @@ def _cli_scan(argv: list[str]) -> int:
     parser.add_argument("username", nargs="?")
     parser.add_argument("--full-name")
     parser.add_argument("--email-only")
-    parser.add_argument("--verified", action="store_true", help="Verified platforms only (~791)")
+    parser.add_argument("--verified", action="store_true", help="Use verified platforms (~500, default)")
+    parser.add_argument("--full", action="store_true", help="Use all 1924 platforms")
     parser.add_argument("--no-deep", action="store_true")
     parser.add_argument("--smart", action="store_true")
     parser.add_argument("--email", action="store_true")
@@ -371,8 +374,8 @@ def _cli_scan(argv: list[str]) -> int:
     categories: tuple[str, ...] | None = None
     if args.categories:
         categories = tuple(c.strip() for c in args.categories.split(",") if c.strip())
-    elif args.verified:
-        categories = ("__verified__",)
+    elif args.full:
+        categories = ("__all__",)
 
     cfg = ScanConfig(
         username=args.username,
