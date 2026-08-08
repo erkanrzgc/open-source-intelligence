@@ -232,6 +232,7 @@ platforms:
 - category: dev
   check_method: message
   name: HackTheBox
+  js_heavy: true
   presence_strings:
   - already been taken
   url: https://app.hackthebox.com/users/{username}
@@ -446,6 +447,7 @@ platforms:
   category: community
   check_method: message
   name: Product Hunt
+  js_heavy: true
   presence_strings:
   - :{"data":{"profile":{"__typename"
   url: https://www.producthunt.com/@{username}
@@ -2101,6 +2103,7 @@ platforms:
   check_type: content_absent
   error_text: Whoomp, there it isn't...
   name: CreativeMarket
+  js_heavy: true
   presence_strings:
   - Likes
   url: https://creativemarket.com/users/{username}
@@ -3329,6 +3332,7 @@ platforms:
   check_type: content_absent
   error_text: Channel not found
   name: DLive
+  js_heavy: true
   presence_strings:
   - username
   - profile-part
@@ -4288,6 +4292,7 @@ platforms:
   check_type: content_absent
   error_text: Blog does not exist.
   name: AfreecaTV
+  js_heavy: true
   presence_strings:
   - profile_text
   - profile_image
@@ -4947,6 +4952,7 @@ platforms:
   check_type: content_absent
   error_text: We didn't find what you're looking for
   name: Intigriti
+  js_heavy: true
   presence_strings:
   - avatar-container
   url: https://app.intigriti.com/profile/{username}
@@ -4966,6 +4972,7 @@ platforms:
   check_type: content_absent
   error_text: '>User not found</h1></div>'
   name: app.samsungfood.com
+  js_heavy: true
   presence_strings:
   - alternateName
   - totalTime
@@ -6508,6 +6515,7 @@ platforms:
   check_type: content_absent
   error_text: user-not-found-div
   name: app.airnfts.com
+  js_heavy: true
   presence_strings:
   - username
   - ownerUsername
@@ -7208,6 +7216,7 @@ platforms:
   check_type: content_absent
   error_text: find any matching element, it might be deleted
   name: Bandlab
+  js_heavy: true
   presence_strings:
   - genres
   url: https://www.bandlab.com/api/v1.3/users/{username}
@@ -7668,6 +7677,7 @@ platforms:
   check_type: content_absent
   error_text: 'response: []'
   name: Fansly
+  js_heavy: true
   presence_strings:
   - username
   url: https://apiv2.fansly.com/api/v1/account?usernames={username}
@@ -8024,6 +8034,7 @@ platforms:
   check_method: message
   check_type: content_present
   name: Lesswrong
+  js_heavy: true
   presence_strings:
   - displayName
   success_text: displayName
@@ -12255,6 +12266,7 @@ platforms:
   check_method: message
   check_type: content_present
   name: Taringa
+  js_heavy: true
   presence_strings:
   - User
   - ' user-username'

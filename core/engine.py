@@ -234,7 +234,7 @@ async def _check_platform(
         if platform.check_type == "json_api":
             import json as _json
             if platform.probe_method == "POST" and platform.probe_body:
-                _body_str = _json.dumps(platform.probe_body).replace("{username}", username)
+                _body_str = _json.dumps(platform.probe_body, separators=(",", ":")).replace("{username}", username)
                 status, data, elapsed = await client.post_json(
                     url, _json.loads(_body_str), platform.headers
                 )
@@ -244,7 +244,7 @@ async def _check_platform(
             result.response_time = elapsed
             result.exists = status == 200 and data is not None
             if result.exists and data is not None and (platform.absence_strings or platform.presence_strings):
-                _data_text = _json.dumps(data)
+                _data_text = _json.dumps(data, separators=(",", ":"))
                 absent = _any_absence_match(_data_text, platform.absence_strings)
                 if absent:
                     result.exists = False
@@ -262,7 +262,7 @@ async def _check_platform(
                 try:
                     if platform.probe_method == "POST" and platform.probe_body:
                         import json as _json
-                        _body_str = _json.dumps(platform.probe_body).replace("{username}", username)
+                        _body_str = _json.dumps(platform.probe_body, separators=(",", ":")).replace("{username}", username)
                         _probe_status, _probe_data, _probe_elapsed = await client.post_json(
                             probe_url, _json.loads(_body_str), platform.headers
                         )
@@ -280,7 +280,9 @@ async def _check_platform(
                     return result
                 if _probe_data is not None and platform.absence_strings:
                     import json as _json
-                    _probe_text = _json.dumps(_probe_data) if isinstance(_probe_data, (dict, list)) else str(_probe_data)
+                    _probe_text = _json.dumps(
+                        _probe_data, separators=(",", ":"), ensure_ascii=False
+                    ) if isinstance(_probe_data, (dict, list)) else str(_probe_data)
                     if _any_absence_match(_probe_text, platform.absence_strings):
                         result.http_status = _probe_status
                         result.response_time = _probe_elapsed
@@ -375,6 +377,14 @@ async def _check_platform(
             elif platform.check_type == "content_present":
                 present = (platform.success_text and platform.success_text in body) or _any_presence_match(body, platform.presence_strings)
                 result.exists = status == 200 and present
+
+            # SPA / generic-page guard: if the page says the profile exists but
+            # doesn't even mention the username, it's almost certainly a false
+            # match (empty SPA shell, login page, search page, etc.).
+            if result.exists and body and username.lower() not in body.lower():
+                result.exists = False
+                result.status = "username_not_in_body"
+                result.fp_signals = list(result.fp_signals) + ["username_absent"]
 
             # Soft-404 detection via redirect to a URL that doesn't carry the username.
             # Only applied when the platform didn't already give a definitive signal.
@@ -495,27 +505,33 @@ async def _check_platform(
                         result.exists = status == 200 and present
                     # Re-score after render — the rendered body has real content
                     if result.exists:
-                        fp = score_match(
-                            username=username,
-                            platform_name=platform.name,
-                            status=status,
-                            body=body,
-                            check_type=platform.check_type,
-                        )
-                        result.confidence = fp.confidence
-                        result.fp_signals = list(result.fp_signals) + ["pw_rescore"] + list(fp.signals)
-                        liveness = score_liveness(
-                            username=username,
-                            body=body,
-                            profile_data=result.profile_data,
-                        )
-                        result.is_active_profile = liveness.is_active
-                        result.fp_signals = result.fp_signals + [
-                            f"liveness:{liveness.score:.2f}"
-                        ] + list(liveness.signals)
-                        if not liveness.is_active:
-                            penalty = 0.25 if platform.check_type == "status" else 0.15
-                            result.confidence = max(0.0, result.confidence - penalty)
+                        # Username must be in the rendered body
+                        if username.lower() not in body.lower():
+                            result.exists = False
+                            result.status = "username_not_in_body"
+                            result.fp_signals = list(result.fp_signals) + ["username_absent", "pw_rescore"]
+                        else:
+                            fp = score_match(
+                                username=username,
+                                platform_name=platform.name,
+                                status=status,
+                                body=body,
+                                check_type=platform.check_type,
+                            )
+                            result.confidence = fp.confidence
+                            result.fp_signals = list(result.fp_signals) + ["pw_rescore"] + list(fp.signals)
+                            liveness = score_liveness(
+                                username=username,
+                                body=body,
+                                profile_data=result.profile_data,
+                            )
+                            result.is_active_profile = liveness.is_active
+                            result.fp_signals = result.fp_signals + [
+                                f"liveness:{liveness.score:.2f}"
+                            ] + list(liveness.signals)
+                            if not liveness.is_active:
+                                penalty = 0.25 if platform.check_type == "status" else 0.15
+                                result.confidence = max(0.0, result.confidence - penalty)
 
         if result.status == "pending":
             result.status = (
