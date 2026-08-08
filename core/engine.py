@@ -246,9 +246,16 @@ async def _check_platform(
             if platform.url_probe:
                 probe_url = platform.url_probe.replace("{username}", username)
                 try:
-                    _probe_status, _probe_data, _probe_elapsed = await client.get_json(
-                        probe_url, platform.headers
-                    )
+                    if platform.probe_method == "POST" and platform.probe_body:
+                        import json as _json
+                        _body_str = _json.dumps(platform.probe_body).replace("{username}", username)
+                        _probe_status, _probe_data, _probe_elapsed = await client.post_json(
+                            probe_url, _json.loads(_body_str), platform.headers
+                        )
+                    else:
+                        _probe_status, _probe_data, _probe_elapsed = await client.get_json(
+                            probe_url, platform.headers
+                        )
                 except Exception:
                     _probe_status, _probe_data, _probe_elapsed = -1, None, 0.0
                 if _probe_status != 200:

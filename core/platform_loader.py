@@ -40,6 +40,8 @@ class Platform:
     presence_strings: tuple[str, ...] = ()
     url_probe: str | None = None
     check_method: str = "status"
+    probe_method: str = "GET"
+    probe_body: dict | None = None
 
 
 BUILTIN_YAML = Path(__file__).resolve().parent.parent / "modules" / "platforms.yaml"
@@ -84,6 +86,12 @@ def _coerce(entry: dict[str, Any]) -> Platform:
     check_method = entry.get("check_method", "status")
     if check_method not in ("status", "message", "response_url"):
         raise ValueError(f"platform {name!r} invalid check_method {check_method!r}")
+    probe_method = entry.get("probe_method", "GET")
+    if probe_method not in ("GET", "POST"):
+        raise ValueError(f"platform {name!r} invalid probe_method {probe_method!r}")
+    probe_body = entry.get("probe_body")
+    if probe_body is not None and not isinstance(probe_body, dict):
+        raise ValueError(f"platform {name!r} probe_body must be a mapping")
     return Platform(
         name=name,
         url=url,
@@ -100,6 +108,8 @@ def _coerce(entry: dict[str, Any]) -> Platform:
         presence_strings=tuple(str(s) for s in presence if str(s).strip()),
         url_probe=url_probe,
         check_method=check_method,
+        probe_method=probe_method,
+        probe_body=probe_body,
     )
 
 

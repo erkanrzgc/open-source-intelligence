@@ -171,6 +171,11 @@ platforms:
   name: LeetCode
   presence_strings:
   - '"username":'
+  probe_body:
+    query: 'query getUserProfile($username: String!) { matchedUser(username: $username) { username } }'
+    variables:
+      username: '{username}'
+  probe_method: POST
   url: https://leetcode.com/u/{username}/
   url_probe: https://leetcode.com/graphql/
 - absence_strings:
