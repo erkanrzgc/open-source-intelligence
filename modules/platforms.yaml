@@ -6,6 +6,7 @@ platforms:
   check_method: message
   check_type: content_absent
   error_text: Sorry, this page isn't available
+  has_deep_scraper: true
   js_heavy: true
   name: Instagram
   presence_strings:
@@ -18,6 +19,7 @@ platforms:
   check_method: message
   check_type: content_absent
   error_text: '"statusCode":10221'
+  has_deep_scraper: true
   js_heavy: true
   name: TikTok
   presence_strings:
@@ -194,6 +196,7 @@ platforms:
   - '"total":0'
   category: dev
   check_method: message
+  has_deep_scraper: true
   name: npm
   presence_strings:
   - '"objects":[{'
@@ -310,6 +313,7 @@ platforms:
   - 404 Not Found
   category: content
   check_method: message
+  has_deep_scraper: true
   name: YouTube
   presence_strings:
   - visitorData
@@ -731,6 +735,7 @@ platforms:
     user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36
       (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36
     x-guest-token: '2042544199166284172'
+  has_deep_scraper: true
   name: X
   presence_strings:
   - '"legacy"'

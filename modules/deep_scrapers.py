@@ -387,7 +387,7 @@ DEEP_SCRAPERS = {
     "Steam": scrape_steam,
     "Keybase": scrape_keybase,
     "Instagram": scrape_instagram,
-    "Twitter / X": scrape_twitter,
+    "X": scrape_twitter,
     "TikTok": scrape_tiktok,
     "YouTube": scrape_youtube,
     "npm": scrape_npm,
