@@ -324,11 +324,10 @@ platforms:
   - '"user":null'
   category: content
   check_method: message
+  check_type: content_absent
+  error_text: User not found
   name: Hashnode
-  presence_strings:
-  - '"username"'
   url: https://hashnode.com/@{username}
-  url_probe: https://gql.hashnode.com?query=%7Buser(username%3A%20%22{username}%22)%20%7B%20name%20username%20%7D%7D
 - category: content
   check_method: status
   name: Substack
@@ -466,10 +465,8 @@ platforms:
 - absence_strings:
   - Page not found
   category: community
-  check_method: message
+  check_method: status
   name: Gumroad
-  presence_strings:
-  - title="Gumroad"
   url: https://{username}.gumroad.com
   username_pattern: ^[^\.]+$
 - absence_strings:
@@ -1954,9 +1951,6 @@ platforms:
   check_type: content_absent
   error_text: NotFound__menu
   name: Steemit
-  presence_strings:
-  - profile
-  - ' username'
   url: https://steemit.com/@{username}
 - absence_strings:
   - Error 404 (Not Found)
@@ -2612,12 +2606,8 @@ platforms:
 - absence_strings:
   - error-fill
   category: content
-  check_method: message
+  check_method: status
   name: Periscope
-  presence_strings:
-  - profile
-  - ProfileAuthor
-  - ProfileUsername
   url: https://www.periscope.tv/{username}/
 - category: community
   check_method: status
