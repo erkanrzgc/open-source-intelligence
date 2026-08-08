@@ -76,13 +76,12 @@ cases:
           <p>Welcome to your new profile! Click here to add a bio.</p>
         </body></html>
     expect:
-      # Single-platform _check_platform leaves exists=True; the FP phase
-      # below the threshold drops it. We assert the confidence is well
-      # below the default 0.45 threshold so the phase WILL drop it.
-      exists: true
-      confidence_at_most: 0.20
+      # username_not_in_body filter now hard-drops empty shells immediately
+      # instead of relying on the FP filter to catch them later.
+      exists: false
+      status_contains: username_not_in_body
       signals_include:
-        - liveness
+        - username_absent
 
   - case_name: content_absent_user_not_found
     username: ghostuser

@@ -378,6 +378,13 @@ async def _check_platform(
                 present = (platform.success_text and platform.success_text in body) or _any_presence_match(body, platform.presence_strings)
                 result.exists = status == 200 and present
 
+            # Soft-404 detection via redirect to a URL that doesn't carry the username.
+            redirected_off = _looks_redirected_off(url, final_url, username)
+            if result.exists and redirected_off and platform.check_type == "status":
+                result.exists = False
+                result.status = "soft_404_redirected"
+                result.fp_signals = list(result.fp_signals) + ["redirect_off_target"]
+
             # SPA / generic-page guard: if the page says the profile exists but
             # doesn't even mention the username, it's almost certainly a false
             # match (empty SPA shell, login page, search page, etc.).
@@ -385,14 +392,6 @@ async def _check_platform(
                 result.exists = False
                 result.status = "username_not_in_body"
                 result.fp_signals = list(result.fp_signals) + ["username_absent"]
-
-            # Soft-404 detection via redirect to a URL that doesn't carry the username.
-            # Only applied when the platform didn't already give a definitive signal.
-            redirected_off = _looks_redirected_off(url, final_url, username)
-            if result.exists and redirected_off and platform.check_type == "status":
-                result.exists = False
-                result.status = "soft_404_redirected"
-                result.fp_signals = list(result.fp_signals) + ["redirect_off_target"]
 
             login_required = result.exists and _looks_login_required(status, body)
             if login_required:
