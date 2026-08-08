@@ -32,7 +32,7 @@ python osint.py      # or just: osint
 Username: erkanrzgc
 
 [1] Quick  — ~500 platforms
-[2] Full   — all 1924 platforms
+[2] Full   — all 1922 platforms
 [3] Custom — pick categories yourself
 
 Choose: 1
@@ -76,7 +76,7 @@ osint scan erkanrzgc
 ```bash
 osint                          # interactive mode
 osint scan <username>          # one-liner, ~500 platforms
-osint scan <username> --full   # all 1924 platforms
+osint scan <username> --full   # all 1922 platforms
 osint scan <username> --smart  # username variations
 osint scan <username> --full-name "John Doe"  # name → handle resolution
 ```

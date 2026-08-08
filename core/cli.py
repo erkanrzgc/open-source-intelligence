@@ -349,7 +349,7 @@ async def _interactive() -> int:
     console.print()
     console.print("[bold]Scan type:[/bold]")
     console.print("  [1] Quick     — default platforms (~500)")
-    console.print("  [2] Full      — all 1924 platforms")
+    console.print("  [2] Full      — all 1922 platforms")
     console.print("  [3] Custom    — pick everything yourself")
     console.print()
 
@@ -445,7 +445,7 @@ def _cli_scan(argv: list[str]) -> int:
     parser.add_argument("--full-name")
     parser.add_argument("--email-only")
     parser.add_argument("--verified", action="store_true", help="Use verified platforms (~500, default)")
-    parser.add_argument("--full", action="store_true", help="Use all 1924 platforms")
+    parser.add_argument("--full", action="store_true", help="Use all 1922 platforms")
     parser.add_argument("--no-deep", action="store_true")
     parser.add_argument("--smart", action="store_true")
     parser.add_argument("--email", action="store_true")
