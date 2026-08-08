@@ -16,11 +16,46 @@ COMMON_DOMAINS = [
 ]
 
 
-def generate_email_candidates(username: str) -> list[str]:
+def generate_email_candidates(username: str, full_name: str | None = None) -> list[str]:
+    candidates: list[str] = []
     clean = username.lower().strip().replace(" ", "")
-    candidates = []
+    seen: set[str] = set()
+
+    def add(candidate: str) -> None:
+        if candidate not in seen:
+            seen.add(candidate)
+            candidates.append(candidate)
+
+    # Username-based candidates
     for domain in COMMON_DOMAINS:
-        candidates.append(f"{clean}@{domain}")
+        add(f"{clean}@{domain}")
+
+    # Name-based candidates from full_name
+    if full_name:
+        parts = [p.lower().strip() for p in full_name.split() if p.strip()]
+        if len(parts) >= 2:
+            first, last = parts[0], parts[-1]
+            patterns = [
+                f"{first}.{last}",           # erkan.rizgic
+                f"{first}{last}",            # erkanrizgic
+                f"{last}.{first}",           # rizgic.erkan
+                f"{last}{first}",            # rizgicerkan
+                f"{first[0]}.{last}",        # e.rizgic
+                f"{first[0]}{last}",         # erizgic
+                f"{first}.{last[0]}",        # erkan.r
+                f"{first}",                  # erkan
+                f"{last}",                   # rizgic
+            ]
+            if len(parts) >= 3:
+                middle = parts[1]
+                patterns.extend([
+                    f"{first}{middle[0]}{last}",     # erkanrrizgic
+                    f"{first[0]}{middle[0]}{last}",  # errrizgic
+                ])
+            for pattern in patterns:
+                for domain in COMMON_DOMAINS:
+                    add(f"{pattern}@{domain}")
+
     return candidates
 
 
@@ -55,9 +90,10 @@ async def discover_emails(
     client: HTTPClient,
     username: str,
     known_emails: list[str] | None = None,
+    full_name: str | None = None,
 ) -> list[EmailResult]:
     results = []
-    candidates = generate_email_candidates(username)
+    candidates = generate_email_candidates(username, full_name)
     if known_emails:
         for e in known_emails:
             if e not in candidates:

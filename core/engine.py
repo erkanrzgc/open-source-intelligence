@@ -1127,7 +1127,7 @@ async def _phase_email_breach(
     if cfg.email_only and cfg.email_only not in known_emails:
         known_emails.insert(0, cfg.email_only)
 
-    email_results = await discover_emails(client, cfg.username, known_emails)
+    email_results = await discover_emails(client, cfg.username, known_emails, cfg.full_name)
     # Make sure the explicit email_only target is always represented in
     # results even when discover_emails couldn't verify it via Gravatar.
     if cfg.email_only and not any(er.email == cfg.email_only for er in email_results):

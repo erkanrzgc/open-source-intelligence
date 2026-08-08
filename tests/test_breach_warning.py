@@ -28,7 +28,7 @@ def test_engine_warns_when_hibp_key_missing(monkeypatch):
         async def __aexit__(self, *args):
             return None
 
-    async def fake_discover_emails(client, username, known_emails=None):
+    async def fake_discover_emails(client, username, known_emails=None, full_name=None):
         return []
 
     monkeypatch.setattr(engine, "HTTPClient", FakeHTTPClient)
