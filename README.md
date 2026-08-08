@@ -17,8 +17,10 @@
 ## Quickstart
 
 ```bash
-pip install git+https://github.com/erkanrzgc/open-source-intelligence.git
-osint
+git clone https://github.com/erkanrzgc/open-source-intelligence.git
+cd open-source-intelligence
+pip install -e .
+python osint.py      # or just: osint
 ```
 
 ```
@@ -27,11 +29,9 @@ osint
 │ 791 platforms · AI validation                │
 ╰──────────────────────────────────────────────╯
 
-Username: erkanrzgc
 
 [1] Quick  — 791 platforms, AI validation
-[2] Full   — all platforms
-[3] Custom — pick categories yourself
+[2] Full   — all 1924 platforms
 
 Choose: 1
 
@@ -176,6 +176,21 @@ python mcp_server.py
     }
   }
 }
+```
+
+---
+
+## Docker
+
+```bash
+docker build -t open-source-intelligence .
+docker run --rm -p 127.0.0.1:8000:8000 open-source-intelligence
+```
+
+Or with Compose:
+
+```bash
+docker compose up --build api
 ```
 
 ---

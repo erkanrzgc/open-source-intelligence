@@ -242,7 +242,7 @@ async def _ai_verify_page(analyzer, username: str, platform: str, url: str, html
 async def _interactive() -> int:
     console.print(Panel(
         "[bold blue]Open Source Intelligence[/bold blue] — username scanner\n"
-        "~500 verified platforms · email breach · AI validation · zero false positives",
+        "791 platforms · email breach · AI validation",
         border_style="blue",
     ))
     console.print()
@@ -254,7 +254,7 @@ async def _interactive() -> int:
 
     console.print()
     console.print("[bold]Scan type:[/bold]")
-    console.print("  [1] Quick     — verified platforms (~500, fast)")
+    console.print("  [1] Quick     — 791 platforms, AI validation")
     console.print("  [2] Full      — all 1924 platforms")
     console.print("  [3] Custom    — pick everything yourself")
     console.print()
@@ -272,7 +272,7 @@ async def _interactive() -> int:
     elif choice == "3":
         cats_raw = _pick_categories()
         if cats_raw is None:
-            use_verified = Confirm.ask("Verified platforms only? (~500, recommended)", default=True)
+            use_verified = Confirm.ask("Verified platforms only? (~791, recommended)", default=True)
             categories = ("__verified__",) if use_verified else None
         else:
             categories = cats_raw
@@ -351,7 +351,7 @@ def _cli_scan(argv: list[str]) -> int:
     parser.add_argument("username", nargs="?")
     parser.add_argument("--full-name")
     parser.add_argument("--email-only")
-    parser.add_argument("--verified", action="store_true", help="Verified platforms only (~450)")
+    parser.add_argument("--verified", action="store_true", help="Verified platforms only (~791)")
     parser.add_argument("--no-deep", action="store_true")
     parser.add_argument("--smart", action="store_true")
     parser.add_argument("--email", action="store_true")
