@@ -14,15 +14,6 @@ platforms:
   url_probe: https://www.instagram.com/api/v1/users/web_profile_info/?username={username}
 - category: social
   js_heavy: true
-  name: Twitter / X
-  url: https://x.com/{username}
-- absence_strings:
-  - serverCode":404
-  category: social
-  check_method: message
-  check_type: content_absent
-  error_text: Couldn't find this account
-  js_heavy: true
   name: TikTok
   presence_strings:
   - '"nickname":'
@@ -730,10 +721,10 @@ platforms:
     user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36
       (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36
     x-guest-token: '2042544199166284172'
-  name: Twitter
+  name: X
   presence_strings:
   - '"legacy"'
-  url: https://twitter.com/{username}
+  url: https://x.com/{username}
   url_probe: https://twitter.com/i/api/graphql/ZRnOhhXPwue_JGILb9TNug/UserByScreenName?variables=%7B%22screen_name%22%3A%22{username}%22%2C%22withHighlightedLabel%22%3Atrue%7D
   username_pattern: ^[a-zA-Z0-9_]{1,15}$
 - category: dev
@@ -12429,11 +12420,6 @@ platforms:
   name: WordPress.org (Forums)
   success_text: '"error":"That username is already in use.'
   url: https://login.wordpress.org/wp-json/wporg/v1/username-available/{username}
-- category: social
-  check_type: content_present
-  name: X
-  success_text: '"reason":"taken"'
-  url: https://api.x.com/i/users/username_available.json?username={username}
 - category: professional
   check_type: content_present
   name: Yahoo! JAPAN Auction

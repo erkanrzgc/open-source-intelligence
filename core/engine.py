@@ -89,7 +89,7 @@ def _track_seed(task: asyncio.Task) -> None:
 IMPORTANT_PLATFORMS_FOR_VARIATIONS = frozenset(
     {
         "GitHub",
-        "Twitter / X",
+        "X",
         "Instagram",
         "Reddit",
         "LinkedIn",
@@ -539,7 +539,7 @@ def _looks_redirected_off(
 
 _HANDLE_PROBE_PLATFORMS: frozenset[str] = frozenset(
     {
-        "GitHub", "Twitter / X", "Instagram", "Reddit", "TikTok",
+        "GitHub", "X", "Instagram", "Reddit", "TikTok",
         "YouTube", "LinkedIn", "Telegram", "Steam", "Twitch",
         "Pinterest", "Medium", "Dev.to", "Keybase", "Mastodon (mastodon.social)",
         "GitLab", "HackerNews", "StackOverflow", "Quora", "Vimeo",
@@ -815,6 +815,9 @@ def _select_platforms(categories: tuple[str, ...] | None) -> list[Platform]:
 
 
 _VERIFIED_CACHE: list[Platform] | None = None
+_VERIFIED_ALIASES: dict[str, str] = {
+    "x": "twitter",  # Twitter → X
+}
 
 
 def _verified_platforms() -> list[Platform]:
@@ -843,7 +846,8 @@ def _verified_platforms() -> list[Platform]:
     result = []
     for p in PLATFORMS:
         pkey = p.name.lower().strip().rstrip(".")
-        if pkey in verified:
+        maigret_key = _VERIFIED_ALIASES.get(pkey, pkey)
+        if maigret_key in verified or pkey in verified:
             result.append(p)
             continue
         for vname in verified:
