@@ -47,12 +47,15 @@ class DomainRateBucket:
         min_interval: float = 1.0,
         jitter: float = 0.5,
         max_penalty: float = 60.0,
+        global_delay: float = 0.0,
     ) -> None:
         self._min_interval = min_interval
         self._jitter = jitter
         self._max_penalty = max_penalty
         self._hosts: dict[str, _HostState] = {}
         self._global_lock = asyncio.Lock()
+        self._global_delay = global_delay
+        self._last_global: float = 0.0
 
     async def _state(self, host: str) -> _HostState:
         async with self._global_lock:
@@ -70,6 +73,16 @@ class DomainRateBucket:
 
     async def acquire(self, host: str) -> None:
         """Block until it is polite to hit ``host`` again."""
+        # Global throttle — minimum delay between any two requests
+        if self._global_delay > 0:
+            async with self._global_lock:
+                now = time.monotonic()
+                wait = (self._last_global + self._global_delay) - now
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                    now = time.monotonic()
+                self._last_global = now
+
         state = await self._state(host)
         async with state.lock:
             now = time.monotonic()

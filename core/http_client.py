@@ -83,7 +83,9 @@ class HTTPClient:
             if verify_tls is None
             else verify_tls
         )
-        self._rate_bucket = rate_bucket if rate_bucket is not None else DomainRateBucket()
+        self._rate_bucket = rate_bucket if rate_bucket is not None else DomainRateBucket(
+            global_delay=float(os.environ.get("OSINT_RATE_LIMIT_DELAY", "0.1")),
+        )
         self._rotator: CircuitRotator | None = (
             CircuitRotator(every=new_circuit_every, password=tor_control_password)
             if tor and new_circuit_every > 0

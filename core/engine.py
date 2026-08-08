@@ -479,6 +479,29 @@ async def _check_platform(
                     elif platform.check_type == "content_present":
                         present = (platform.success_text and platform.success_text in body) or _any_presence_match(body, platform.presence_strings)
                         result.exists = status == 200 and present
+                    # Re-score after render — the rendered body has real content
+                    if result.exists:
+                        fp = score_match(
+                            username=username,
+                            platform_name=platform.name,
+                            status=status,
+                            body=body,
+                            check_type=platform.check_type,
+                        )
+                        result.confidence = fp.confidence
+                        result.fp_signals = list(result.fp_signals) + ["pw_rescore"] + list(fp.signals)
+                        liveness = score_liveness(
+                            username=username,
+                            body=body,
+                            profile_data=result.profile_data,
+                        )
+                        result.is_active_profile = liveness.is_active
+                        result.fp_signals = result.fp_signals + [
+                            f"liveness:{liveness.score:.2f}"
+                        ] + list(liveness.signals)
+                        if not liveness.is_active:
+                            penalty = 0.25 if platform.check_type == "status" else 0.15
+                            result.confidence = max(0.0, result.confidence - penalty)
 
         if result.status == "pending":
             result.status = (
