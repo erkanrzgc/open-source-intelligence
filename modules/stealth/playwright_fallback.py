@@ -6,8 +6,13 @@ engine decides a URL needs real rendering, it can call ``fetch_rendered``
 here and get back the DOM after ``domcontentloaded`` (or a custom
 selector) has fired.
 
-Playwright is an **optional** dependency. The module imports cleanly
-without it and exposes ``AVAILABLE = False``.
+Browser priority:
+    1. Patchright (stealth Playwright fork, 30/30 bot-detection tests)
+    2. Playwright  (standard, requires manual stealth patches)
+    3. None        (aiohttp-only fallback)
+
+All are **optional** dependencies. The module imports cleanly without
+any of them and exposes ``AVAILABLE = False``.
 """
 
 from __future__ import annotations
@@ -20,15 +25,27 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-try:
-    from playwright.async_api import (  # type: ignore[import-not-found]
-        async_playwright,
-    )
+# ── browser backend selection ──────────────────────────────────────────
+_async_playwright = None
+_BACKEND = ""
 
+try:
+    from patchright.async_api import async_playwright as _patchright_playwright  # type: ignore[import-not-found]
+    _async_playwright = _patchright_playwright
+    _BACKEND = "patchright"
     AVAILABLE = True
-except ImportError:  # pragma: no cover - optional dep
-    async_playwright = None  # type: ignore[assignment]
-    AVAILABLE = False
+except ImportError:
+    try:
+        from playwright.async_api import (  # type: ignore[import-not-found]
+            async_playwright as _pw,
+        )
+        _async_playwright = _pw
+        _BACKEND = "playwright"
+        AVAILABLE = True
+    except ImportError:  # pragma: no cover - optional dep
+        AVAILABLE = False
+
+log.debug("browser backend: %s (available=%s)", _BACKEND or "none", AVAILABLE)
 
 
 @dataclass(frozen=True)
@@ -57,19 +74,19 @@ async def fetch_rendered(
     screenshot_dir: Path | None = None,
     screenshot_name: str | None = None,
 ) -> RenderedPage | None:
-    """Fetch ``url`` via a headless Chromium.
+    """Fetch ``url`` via a headless Chromium (Patchright or Playwright).
 
-    Returns None if Playwright is missing or the render failed. Callers
+    Returns None if no browser is installed or the render failed. Callers
     should treat None as "fallback unavailable, move on". When
     ``screenshot_dir`` is provided a PNG is saved inside it and the path
     is returned on ``RenderedPage.screenshot_path``.
     """
     if not AVAILABLE:
-        log.debug("playwright not installed; skipping rendered fetch for %s", url)
+        log.debug("no browser backend installed; skipping rendered fetch for %s", url)
         return None
 
     try:
-        async with async_playwright() as pw:  # type: ignore[misc]
+        async with _async_playwright() as pw:  # type: ignore[misc]
             launch_args: dict[str, object] = {"headless": True}
             if proxy:
                 launch_args["proxy"] = {"server": proxy}
@@ -112,5 +129,5 @@ async def fetch_rendered(
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - fallback must not crash scan
-        log.debug("playwright render failed for %s: %s", url, exc)
+        log.debug("browser render failed for %s: %s", url, exc)
         return None

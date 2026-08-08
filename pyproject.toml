@@ -42,7 +42,7 @@ ghunt = ["ghunt>=2.3.0", "httpx>=0.24.0"]
 toutatis = ["toutatis>=1.4"]
 phone = ["phonenumbers>=8.13"]
 tor = ["stem>=1.8.2"]
-browser = ["playwright>=1.40.0", "trafilatura>=1.12.0"]
+browser = ["playwright>=1.40.0", "patchright>=1.45.0", "trafilatura>=1.12.0"]
 filetype = ["magika>=0.6.0"]
 ai = [
     "llama-cpp-python>=0.3.0",
