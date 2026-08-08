@@ -96,7 +96,7 @@ def _should_retry_scrapling(status, body, url):
     """Check if aiohttp response looks blocked — worth a Scrapling retry."""
     if not _SCRAPLING_AVAILABLE:
         return False
-    if status in (403, 429, 503):
+    if status in (-1, 0, 403, 429, 503):
         return True
     if status == 200 and body and len(body) < 2000:
         blocked = any(s in body for s in (
