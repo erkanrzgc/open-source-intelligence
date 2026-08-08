@@ -37,6 +37,80 @@ from modules.stealth.tor_control import CircuitRotator
 log = get_logger(__name__)
 
 
+# ── Scrapling stealth transport (optional) ────────────────────────────
+_SCRAPLING_AVAILABLE = False
+_SCRAPLING_FETCHER = None
+_SCRAPLING_INITED = False
+
+try:
+    from scrapling import AsyncFetcher  # type: ignore[import-not-found]
+
+    _SCRAPLING_AVAILABLE = True
+except ImportError:
+    pass
+
+
+async def _init_scrapling():
+    global _SCRAPLING_INITED, _SCRAPLING_FETCHER
+    if _SCRAPLING_INITED:
+        return _SCRAPLING_FETCHER
+    _SCRAPLING_INITED = True
+    if not _SCRAPLING_AVAILABLE:
+        return None
+    try:
+        _SCRAPLING_FETCHER = AsyncFetcher()
+        log.debug("Scrapling transport active")
+        return _SCRAPLING_FETCHER
+    except Exception as exc:
+        log.debug("Scrapling init failed: %s", exc)
+        return None
+
+
+async def _try_scrapling_get(url, headers, timeout):
+    """Try Scrapling fetch. Returns None on failure (use aiohttp)."""
+    if not _SCRAPLING_AVAILABLE:
+        return None
+    if not url.startswith("https://"):
+        return None
+    if any(d in url for d in ("example.com", "fake.test", "localhost", "127.0.0.1")):
+        return None
+    fetcher = await _init_scrapling()
+    if fetcher is None:
+        return None
+    try:
+        t0 = time.monotonic()
+        resp = await asyncio.wait_for(
+            fetcher.get(url, headers=headers),
+            timeout=timeout,
+        )
+        elapsed = time.monotonic() - t0
+        return resp.status, resp.html_content, elapsed, resp.url
+    except asyncio.TimeoutError:
+        return 0, "", time.monotonic() - t0, None
+    except Exception as exc:
+        log.debug("Scrapling fetch failed for %s: %s", url, exc)
+        return None
+
+
+def _should_retry_scrapling(status, body, url):
+    """Check if aiohttp response looks blocked — worth a Scrapling retry."""
+    if not _SCRAPLING_AVAILABLE:
+        return False
+    if status in (403, 429, 503):
+        return True
+    if status == 200 and body and len(body) < 2000:
+        blocked = any(s in body for s in (
+            "Just a moment",
+            "cf-browser-verification",
+            "Attention Required",
+            "captcha",
+            "_cf_chl_opt",
+        ))
+        if blocked:
+            return True
+    return False
+
+
 def _backoff(attempt: int) -> float:
     """Exponential backoff with jitter to avoid thundering-herd on mass retries."""
     return RETRY_DELAY * (2 ** attempt) * random.uniform(0.5, 1.5)
@@ -194,9 +268,15 @@ class HTTPClient:
         headers: dict | None = None,
         allow_redirects: bool = True,
     ) -> tuple[int, str, float]:
-        status, body, elapsed, _ = await self._get_internal(
+        status, body, elapsed, final = await self._get_internal(
             url, headers, allow_redirects=allow_redirects
         )
+        # When aiohttp gets blocked (403 / empty body / CF challenge),
+        # retry via Scrapling's stealthier TLS transport.
+        if _should_retry_scrapling(status, body, url):
+            sr = await _try_scrapling_get(url, headers, self._request_timeout)
+            if sr is not None:
+                return sr[0], sr[1], sr[2]
         return status, body, elapsed
 
     async def get_with_meta(
