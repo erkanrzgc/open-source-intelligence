@@ -276,12 +276,33 @@ async def _verify_all_matches(result: ScanResult) -> ScanResult:
 
 
 async def _ai_verify_page(analyzer, target_username: str, full_name: str | None, known_emails: list[str], known_handles: list[str], platform: str, url: str, html: str) -> bool:
-    """Ask AI: is this page a real profile?"""
+    """Ask AI: is this page a real profile?
+
+    Extracts clean readable text from HTML via trafilatura (handles React/Vue/Angular/Svelte
+    SPAs as long as the HTML is server-rendered or we pre-rendered with Playwright).
+    Falls back to regex tag-stripping if trafilatura is not installed.
+    """
     import re
     from core.analysis.skill_loader import run_skill, SkillError
 
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"\s+", " ", text).strip()[:4000]
+    try:
+        import trafilatura
+        text = trafilatura.extract(
+            html,
+            output_format="txt",
+            include_comments=False,
+            include_tables=False,
+            include_images=False,
+            include_links=False,
+        )
+        if not text:
+            text = re.sub(r"<[^>]+>", " ", html)
+            text = re.sub(r"\s+", " ", text).strip()
+    except ImportError:
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text).strip()
+
+    text = text.strip()[:4000]
 
     target_ctx: dict = {"username": target_username}
     if full_name:
