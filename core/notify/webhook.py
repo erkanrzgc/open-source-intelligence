@@ -1,7 +1,7 @@
 """Generic webhook notifier — POSTs the notification as JSON.
 
-Reads ``CYBERM4FIA_WEBHOOK_URL`` (and optional ``CYBERM4FIA_WEBHOOK_SECRET``
-which, when set, is sent as the ``X-Cyberm4fia-Secret`` header for
+Reads ``OSINT_WEBHOOK_URL`` (and optional ``OSINT_WEBHOOK_SECRET``
+which, when set, is sent as the ``X-OSINT-Secret`` header for
 receiver-side auth) from the environment.
 """
 
@@ -33,16 +33,16 @@ class WebhookNotifier:
 
     @classmethod
     def from_env(cls) -> "WebhookNotifier | None":
-        url = os.environ.get("CYBERM4FIA_WEBHOOK_URL", "").strip()
+        url = os.environ.get("OSINT_WEBHOOK_URL", "").strip()
         if not url:
             return None
-        secret = os.environ.get("CYBERM4FIA_WEBHOOK_SECRET", "").strip() or None
+        secret = os.environ.get("OSINT_WEBHOOK_SECRET", "").strip() or None
         return cls(url, secret=secret)
 
     async def send(self, notification: Notification) -> bool:
         headers = {"Content-Type": "application/json"}
         if self._secret:
-            headers["X-Cyberm4fia-Secret"] = self._secret
+            headers["X-OSINT-Secret"] = self._secret
         try:
             timeout = aiohttp.ClientTimeout(total=self._timeout)
             async with aiohttp.ClientSession(timeout=timeout) as session:

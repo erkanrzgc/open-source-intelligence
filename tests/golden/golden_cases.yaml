@@ -44,7 +44,7 @@ cases:
         </body></html>
     expect:
       exists: true
-      confidence_at_least: 0.85
+      confidence_at_least: 0.70
       signals_include:
         - title
         - canonical

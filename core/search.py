@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,7 @@ class SearchHit:
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_FTS_SCHEMA)
     return conn
 
@@ -207,6 +209,20 @@ def _history_row_count(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row else 0
 
 
+def _sanitize_fts5(query: str) -> str:
+    """Strip FTS5 operators from user input so bare words become safe phrase matches.
+
+    SQLite FTS5 treats ``AND``, ``OR``, ``NOT``, ``NEAR``, ``*``, ``"``,
+    and parentheses as operators. We strip them and return the cleaned text.
+    Leading/trailing ``*`` is removed; internal ``*`` is kept as a wildcard hint.
+    """
+    cleaned = re.sub(r'["()]', " ", query)
+    cleaned = re.sub(r"\b(AND|OR|NOT|NEAR)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\*+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 def search(
     query: str,
     *,
@@ -223,6 +239,9 @@ def search(
     """
     q = (query or "").strip()
     if not q or limit <= 0 or not db_path.exists():
+        return []
+    safe = _sanitize_fts5(q)
+    if not safe:
         return []
     try:
         conn = _connect(db_path)
@@ -243,7 +262,7 @@ def search(
             "JOIN scans s ON s.id = scans_fts.rowid "
             "WHERE scans_fts MATCH ? "
         )
-        params: list = [q]
+        params: list = [safe]
         if username:
             sql += "AND s.username = ? "
             params.append(username)
@@ -252,7 +271,7 @@ def search(
         try:
             rows = conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError as exc:
-            log.info("search: invalid FTS query %r: %s", q, exc)
+            log.info("search: FTS query failed for %r (sanitized=%r): %s", q, safe, exc)
             return []
     finally:
         conn.close()

@@ -1,8 +1,8 @@
 """Load platform definitions from YAML files.
 
 Priority order (highest wins on name conflict):
-    1. User override: $CYBERM4FIA_PLATFORMS_FILE
-    2. User config:   ~/.config/cyberm4fia/platforms.yaml
+    1. User override: $OSINT_PLATFORMS_FILE
+    2. User config:   ~/.config/open-source-intelligence/platforms.yaml
     3. Builtin:       modules/platforms.yaml
 
 User files can also extend via a `platforms:` list. To remove a
@@ -35,10 +35,15 @@ class Platform:
     has_deep_scraper: bool = False
     js_heavy: bool = False
     wait_for_selector: str | None = None
+    username_pattern: str | None = None
+    absence_strings: tuple[str, ...] = ()
+    presence_strings: tuple[str, ...] = ()
+    url_probe: str | None = None
+    check_method: str = "status"
 
 
 BUILTIN_YAML = Path(__file__).resolve().parent.parent / "modules" / "platforms.yaml"
-USER_YAML = Path.home() / ".config" / "cyberm4fia" / "platforms.yaml"
+USER_YAML = Path.home() / ".config" / "open-source-intelligence" / "platforms.yaml"
 
 _VALID_CHECK_TYPES = {"status", "content_absent", "content_present", "json_api"}
 
@@ -60,6 +65,25 @@ def _coerce(entry: dict[str, Any]) -> Platform:
     wait_for_selector = entry.get("wait_for_selector")
     if wait_for_selector is not None and not isinstance(wait_for_selector, str):
         raise ValueError(f"platform {name!r} wait_for_selector must be a string")
+    username_pattern = entry.get("username_pattern")
+    if username_pattern is not None and not isinstance(username_pattern, str):
+        raise ValueError(f"platform {name!r} username_pattern must be a string")
+    absence = entry.get("absence_strings")
+    if absence is None:
+        absence = []
+    elif not isinstance(absence, list):
+        raise ValueError(f"platform {name!r} absence_strings must be a list")
+    presence = entry.get("presence_strings")
+    if presence is None:
+        presence = []
+    elif not isinstance(presence, list):
+        raise ValueError(f"platform {name!r} presence_strings must be a list")
+    url_probe = entry.get("url_probe")
+    if url_probe is not None and not isinstance(url_probe, str):
+        raise ValueError(f"platform {name!r} url_probe must be a string")
+    check_method = entry.get("check_method", "status")
+    if check_method not in ("status", "message", "response_url"):
+        raise ValueError(f"platform {name!r} invalid check_method {check_method!r}")
     return Platform(
         name=name,
         url=url,
@@ -71,30 +95,45 @@ def _coerce(entry: dict[str, Any]) -> Platform:
         has_deep_scraper=bool(entry.get("has_deep_scraper", False)),
         js_heavy=bool(entry.get("js_heavy", False)),
         wait_for_selector=wait_for_selector,
+        username_pattern=username_pattern,
+        absence_strings=tuple(str(s) for s in absence if str(s).strip()),
+        presence_strings=tuple(str(s) for s in presence if str(s).strip()),
+        url_probe=url_probe,
+        check_method=check_method,
     )
 
 
-def _read_yaml(path: Path) -> list[dict[str, Any]]:
+def _read_yaml(path: Path, *, required: bool = False) -> list[dict[str, Any]]:
     if not path.is_file():
+        if required:
+            raise RuntimeError(f"required platforms file not found: {path}")
         return []
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
+        if required:
+            raise RuntimeError(f"failed to parse required platforms file {path}: {exc}") from exc
         log.warning("failed to parse %s: %s", path, exc)
         return []
     if not isinstance(raw, dict):
-        log.warning("%s: expected top-level mapping, got %s", path, type(raw).__name__)
+        msg = f"{path}: expected top-level mapping, got {type(raw).__name__}"
+        if required:
+            raise RuntimeError(msg)
+        log.warning(msg)
         return []
     platforms = raw.get("platforms", [])
     if not isinstance(platforms, list):
-        log.warning("%s: 'platforms' must be a list", path)
+        msg = f"{path}: 'platforms' must be a list"
+        if required:
+            raise RuntimeError(msg)
+        log.warning(msg)
         return []
     return platforms
 
 
 def _user_paths() -> list[Path]:
     paths: list[Path] = []
-    env = os.environ.get("CYBERM4FIA_PLATFORMS_FILE")
+    env = os.environ.get("OSINT_PLATFORMS_FILE")
     if env:
         paths.append(Path(env).expanduser())
     if USER_YAML.is_file():
@@ -107,7 +146,7 @@ def load_platforms() -> list[Platform]:
     merged: dict[str, Platform] = {}
     disabled: set[str] = set()
 
-    for entry in _read_yaml(BUILTIN_YAML):
+    for entry in _read_yaml(BUILTIN_YAML, required=True):
         try:
             p = _coerce(entry)
         except ValueError as exc:

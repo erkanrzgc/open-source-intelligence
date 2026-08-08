@@ -20,7 +20,7 @@ class StubBackend:
         self.response = response
         self.calls: list[tuple[str, str]] = []
 
-    def complete(
+    async def complete(
         self, system: str, user: str, *, max_tokens: int, temperature: float
     ) -> str:
         self.calls.append((system, user))
@@ -129,7 +129,7 @@ def test_parse_report_filters_non_list_fields():
     assert report.exposures == ["ok"]
 
 
-def test_analyze_with_stub_backend():
+async def test_analyze_with_stub_backend():
     stub = StubBackend(
         json.dumps(
             {
@@ -142,7 +142,7 @@ def test_analyze_with_stub_backend():
         )
     )
     analyzer = LLMAnalyzer(backend=stub)
-    report = analyzer.analyze(_sample_payload())
+    report = await analyzer.analyze(_sample_payload())
 
     assert isinstance(report, AIReport)
     assert report.confidence == 72
@@ -158,16 +158,16 @@ def test_analyze_with_stub_backend():
     assert "GhostNet" not in user_msg
 
 
-def test_analyze_without_backend_raises():
+async def test_analyze_without_backend_raises():
     analyzer = LLMAnalyzer(backend=None)
     with pytest.raises(LLMUnavailable):
-        analyzer.analyze(_sample_payload())
+        await analyzer.analyze(_sample_payload())
 
 
-def test_analyze_backend_bad_json_propagates():
+async def test_analyze_backend_bad_json_propagates():
     analyzer = LLMAnalyzer(backend=StubBackend("totally broken"))
     with pytest.raises(LLMUnavailable):
-        analyzer.analyze(_sample_payload())
+        await analyzer.analyze(_sample_payload())
 
 
 def test_build_user_prompt_contains_schema():

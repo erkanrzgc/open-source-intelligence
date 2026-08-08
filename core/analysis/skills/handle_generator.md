@@ -5,7 +5,7 @@ model:
 max_tokens: 600
 temperature: 0.3
 triggers:
-  - --name CLI flag
+  - cfg.full_name
   - _phase_handle_resolve engine phase
 output_schema: {"type": "object", "required": ["candidates"], "properties": {"candidates": {"type": "array", "items": {"type": "object", "required": ["handle", "score", "rationale"], "properties": {"handle": {"type": "string"}, "score": {"type": "number"}, "rationale": {"type": "string"}}}}}}
 ---

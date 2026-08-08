@@ -4,8 +4,7 @@ FROM mcr.microsoft.com/playwright/python:${PLAYWRIGHT_TAG}
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    CYBERM4FIA_SCREENSHOT_DIR=/data/screenshots
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
@@ -28,12 +27,12 @@ RUN playwright install --with-deps chromium || true
 COPY . .
 
 RUN useradd --create-home --uid 1000 osint \
-    && mkdir -p /data /home/osint/.local/share/cyberm4fia \
+    && mkdir -p /data /home/osint/.local/share/open-source-intelligence \
     && chown -R osint:osint /app /data /home/osint
 USER osint
 
-VOLUME ["/data", "/home/osint/.local/share/cyberm4fia"]
+VOLUME ["/data", "/home/osint/.local/share/open-source-intelligence"]
 EXPOSE 8000
 
-ENTRYPOINT ["python", "main.py"]
-CMD ["--help"]
+ENTRYPOINT ["python", "-m", "uvicorn", "core.api.server:build_app", "--factory"]
+CMD ["--host", "0.0.0.0", "--port", "8000"]

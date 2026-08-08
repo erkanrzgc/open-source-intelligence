@@ -36,6 +36,6 @@ runs: each match contributes +20 (capped at 100).
   Sites without either contribute nothing.
 * Display names are normalised (lower-case, diacritic-fold) but a
   legal-name vs. nickname mismatch still costs the score.
-* The optional `--ai-skills` mode will feed borderline matches through
+* The optional `cfg.ai_skills` mode will feed borderline matches through
   the `profile_validator` skill — that's per-profile, not aggregate;
   this module remains the aggregate scorer.

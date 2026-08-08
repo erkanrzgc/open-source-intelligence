@@ -118,6 +118,7 @@ def payload_to_cytoscape(payload: dict[str, Any]) -> dict[str, list[dict[str, An
         )
 
     # Dedupe nodes by id — a breach can repeat across emails.
+    # Dedupe edges by (source, target, relation) tuple.
     seen: set[str] = set()
     unique_nodes: list[dict[str, Any]] = []
     for n in nodes:
@@ -127,4 +128,13 @@ def payload_to_cytoscape(payload: dict[str, Any]) -> dict[str, list[dict[str, An
         seen.add(nid)
         unique_nodes.append(n)
 
-    return {"nodes": unique_nodes, "edges": edges}
+    seen_edges: set[tuple[str, str, str]] = set()
+    unique_edges: list[dict[str, Any]] = []
+    for e in edges:
+        key = (e["data"]["source"], e["data"]["target"], e["data"]["relation"])
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        unique_edges.append(e)
+
+    return {"nodes": unique_nodes, "edges": unique_edges}

@@ -55,7 +55,7 @@ def _api_key() -> str:
 
 
 def _auth_headers(key: str) -> dict[str, str]:
-    return {"x-key": key, "User-Agent": "cyberm4fia-osint"}
+    return {"x-key": key, "User-Agent": "open-source-intelligence"}
 
 
 def _record_to_hit(row: dict[str, Any]) -> PassiveHit | None:

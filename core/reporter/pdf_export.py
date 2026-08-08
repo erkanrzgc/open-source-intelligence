@@ -64,7 +64,7 @@ def export_pdf(result: ScanResult, filepath: str) -> None:
         filepath,
         pagesize=A4,
         title=f"OSINT sweep — {result.username}",
-        author="cyberm4fia-osint",
+        author="open-source-intelligence",
     )
     styles = getSampleStyleSheet()
     story: list[Any] = []

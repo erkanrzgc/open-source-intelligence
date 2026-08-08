@@ -39,8 +39,8 @@ _IMPOSSIBLE_USERNAME = "__zzz_nonexistent_probe_9999__"
 _BASELINE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 _DEFAULT_CACHE_DIR = Path(
     os.environ.get(
-        "CYBERM4FIA_SOFT404_CACHE",
-        str(Path.home() / ".cache" / "cyberm4fia" / "soft404"),
+        "OSINT_SOFT404_CACHE",
+        str(Path.home() / ".cache" / "open-source-intelligence" / "soft404"),
     )
 )
 SIMHASH_HAMMING_THRESHOLD = 6  # ≤6 bits different ⇒ same template
@@ -65,8 +65,7 @@ def _normalise(body: str, probe_username: str | None = None) -> str:
     for pat in _VOLATILE_PATTERNS:
         cleaned = pat.sub(" ", cleaned)
     if probe_username:
-        cleaned = cleaned.replace(probe_username, "USERNAME")
-        cleaned = cleaned.replace(probe_username.lower(), "USERNAME")
+        cleaned = re.sub(re.escape(probe_username), "USERNAME", cleaned, flags=re.IGNORECASE)
     return cleaned.strip().lower()
 
 

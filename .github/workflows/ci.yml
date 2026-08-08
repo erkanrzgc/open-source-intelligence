@@ -27,13 +27,13 @@ jobs:
           pip install -e ".[dev,api,report,socks,whois,photo,dns]"
 
       - name: Ruff
-        run: ruff check main.py core modules utils tests
+        run: ruff check core modules utils tests mcp_server.py
 
       - name: Mypy
         run: mypy --ignore-missing-imports core modules utils
 
       - name: Bandit
-        run: bandit -r core modules utils main.py mcp_server.py -q
+        run: bandit -r core modules utils mcp_server.py -q
 
       - name: Pytest
         run: pytest --cov=core --cov=modules --cov=utils --cov-report=term-missing

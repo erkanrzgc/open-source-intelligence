@@ -54,7 +54,7 @@ _DEFAULT_AVATAR_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 # Body regexes
 _OG_TITLE_RE = re.compile(
-    r'<meta[^>]+property=["\'](?:og:title|twitter:title)["\'][^>]+content=["\']([^"\']+)["\']',
+    r'''<meta[^>]+property=["'](?:og:title|twitter:title)["'][^>]+content=["']([^"']+)["']''',
     re.IGNORECASE,
 )
 _JSON_LD_PERSON_RE = re.compile(

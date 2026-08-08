@@ -77,9 +77,7 @@ async def test_reddit_success():
     payload = {
         "data": {
             "name": "alice",
-            "link_karma": 100,
-            "comment_karma": 50,
-            "total_karma": 150,
+            "total_karma": 666,
             "created_utc": 1600000000,
             "has_verified_email": True,
             "icon_img": "https://r/av",
@@ -98,7 +96,7 @@ async def test_reddit_success():
         )
         async with HTTPClient() as client:
             result = await scrape_reddit(client, "alice")
-    assert result["link_karma"] == 100
+    assert result["total_karma"] == 666
     assert result["subreddit_name"] == "u/alice"
 
 

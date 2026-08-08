@@ -26,14 +26,14 @@ class _Proc:
 
 
 def test_binary_path_accepts_plain_binary_name(monkeypatch) -> None:
-    monkeypatch.delenv("CYBERM4FIA_GITLEAKS_BIN", raising=False)
+    monkeypatch.delenv("OSINT_GITLEAKS_BIN", raising=False)
     monkeypatch.setattr(gitleaks.shutil, "which", lambda name: f"/usr/bin/{name}")
 
     assert gitleaks._binary_path("gitleaks") == "/usr/bin/gitleaks"
 
 
 def test_binary_path_accepts_env_binary_name(monkeypatch) -> None:
-    monkeypatch.setenv("CYBERM4FIA_GITLEAKS_BIN", "gitleaks")
+    monkeypatch.setenv("OSINT_GITLEAKS_BIN", "gitleaks")
     monkeypatch.setattr(gitleaks.shutil, "which", lambda name: f"/opt/bin/{name}")
 
     assert gitleaks._binary_path() == "/opt/bin/gitleaks"

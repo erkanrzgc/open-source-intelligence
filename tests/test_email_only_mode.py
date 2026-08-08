@@ -1,8 +1,6 @@
-"""Tests for --email-only mode wiring in core.engine."""
+"""Tests for email_only mode wiring in core.engine."""
 
 from __future__ import annotations
-
-import asyncio
 
 import pytest
 

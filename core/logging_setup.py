@@ -1,7 +1,7 @@
-"""Centralized logging for cyberm4fia-osint.
+"""Centralized logging for open-source-intelligence.
 
-Separates diagnostic logging from Rich-based user UI.
-Use get_logger(__name__) inside modules; UI lives in core.reporter.
+Separates diagnostic logging from response serialization and exporters.
+Use get_logger(__name__) inside modules.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ _CONFIGURED = False
 def configure_logging(level: str | None = None) -> None:
     """Configure the root logger once.
 
-    Level precedence: explicit arg > CYBERM4FIA_LOG_LEVEL env var > WARNING.
+    Level precedence: explicit arg > OSINT_LOG_LEVEL env var > WARNING.
     """
     global _CONFIGURED
     if _CONFIGURED:
         return
 
-    resolved = (level or os.environ.get("CYBERM4FIA_LOG_LEVEL") or "WARNING").upper()
+    resolved = (level or os.environ.get("OSINT_LOG_LEVEL") or "WARNING").upper()
     numeric = getattr(logging, resolved, logging.WARNING)
 
     handler = logging.StreamHandler()
@@ -32,7 +32,7 @@ def configure_logging(level: str | None = None) -> None:
         )
     )
 
-    root = logging.getLogger("cyberm4fia")
+    root = logging.getLogger("open_source_intelligence")
     root.setLevel(numeric)
     root.handlers = [handler]
     root.propagate = False
@@ -41,8 +41,8 @@ def configure_logging(level: str | None = None) -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a namespaced logger under the cyberm4fia hierarchy."""
+    """Return a namespaced logger under the application hierarchy."""
     if not _CONFIGURED:
         configure_logging()
-    short = name.split(".")[-1] if name else "cyberm4fia"
-    return logging.getLogger(f"cyberm4fia.{short}")
+    short = name.split(".")[-1] if name else "open_source_intelligence"
+    return logging.getLogger(f"open_source_intelligence.{short}")

@@ -117,7 +117,8 @@ class ScanResult:
     def total_checked(self):
         return len(self.platforms)
 
-    def to_dict(self):
+    def to_dict(self, *, include_all: bool = False) -> dict:
+        platforms_source = self.platforms if include_all else self.found_platforms
         return {
             "username": self.username,
             "scan_time": round(self.scan_time, 2),
@@ -139,7 +140,7 @@ class ScanResult:
                     "is_active_profile": p.is_active_profile,
                     "final_url": p.final_url,
                 }
-                for p in self.found_platforms
+                for p in platforms_source
             ],
             "emails": [
                 {

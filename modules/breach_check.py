@@ -41,7 +41,7 @@ async def check_email_breaches(client: HTTPClient, email: str) -> list[dict]:
         return []
     headers = {
         "hibp-api-key": key,
-        "User-Agent": "cyberm4fia-osint",
+        "User-Agent": "open-source-intelligence",
     }
     url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}?truncateResponse=false"
     try:

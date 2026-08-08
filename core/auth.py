@@ -8,8 +8,7 @@ stdlib surface is more than enough for a single-operator tool.
 
 Auth is *opt-in*: the REST surface only enforces tokens when the
 environment variable ``OSINT_AUTH_REQUIRED`` is set to a truthy value.
-This keeps the existing CLI-first workflow (where the operator runs
-the API on localhost) frictionless.
+This keeps a localhost-only deployment frictionless.
 """
 
 from __future__ import annotations
@@ -21,12 +20,13 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "cyberm4fia" / "users.sqlite3"
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "open-source-intelligence" / "users.sqlite3"
 
 VALID_ROLES = frozenset({"admin", "analyst", "viewer"})
 
@@ -107,6 +107,7 @@ def _verify_password(password: str, stored: str) -> bool:
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
     return conn
 
@@ -273,7 +274,9 @@ def decode_token(token: str, *, secret: str) -> dict[str, Any]:
     exp = payload.get("exp")
     if isinstance(exp, (int, float)) and exp < time.time():
         raise AuthError("token expired")
-    return cast(dict[str, Any], payload)
+    if not isinstance(payload, dict):
+        raise AuthError("malformed payload")
+    return payload
 
 
 # ── helpers for the API layer ──────────────────────────────────────
@@ -288,6 +291,10 @@ def is_auth_required() -> bool:
     )
 
 
+_EPHEMERAL_SECRET = ""
+_EPHEMERAL_SECRET_LOCK = threading.Lock()
+
+
 def get_secret() -> str:
     """JWT signing secret. Falls back to a process-lifetime random key so
     tokens still sign consistently within a single run when the operator
@@ -296,9 +303,10 @@ def get_secret() -> str:
     if env:
         return env
     global _EPHEMERAL_SECRET
-    if not _EPHEMERAL_SECRET:
+    if _EPHEMERAL_SECRET:
+        return _EPHEMERAL_SECRET
+    with _EPHEMERAL_SECRET_LOCK:
+        if _EPHEMERAL_SECRET:
+            return _EPHEMERAL_SECRET
         _EPHEMERAL_SECRET = secrets.token_urlsafe(48)
-    return _EPHEMERAL_SECRET
-
-
-_EPHEMERAL_SECRET = ""
+        return _EPHEMERAL_SECRET

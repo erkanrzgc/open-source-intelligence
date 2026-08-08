@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
-import pytest
-
-from core.config import ScanConfig, _collect_proxy_pool
 from core.proxy_pool import ProxyPool, load_from_file
 
 
@@ -99,54 +95,6 @@ def test_load_from_file_skips_blanks_and_comments(tmp_path: Path) -> None:
         "http://two:8080",
         "socks5://tor:9050",
     )
-
-
-# ── config glue ────────────────────────────────────────────────────
-
-
-def _ns(**overrides) -> SimpleNamespace:
-    base = dict(
-        quick=True, no_deep=True, deep=False, smart=False, email=False,
-        web=False, whois=False, breach=False, photo=False, dns=False,
-        subdomain=False, holehe=False, ghunt=False, toutatis=False,
-        recursive=False, recursive_depth=1, passive=False, domain=None,
-        reverse_image=False, past_usernames=False, phone=None,
-        phone_region=None, crypto=None, full=False, category=None,
-        proxy=None, proxy_pool=None, proxy_file=None, tor=False, timeout=None,
-        fp_threshold=None, no_fingerprint=False, new_circuit_every=0,
-        tor_control_password=None, playwright=False, screenshots=False,
-        screenshot_dir=None, geocode=False, no_enrichment=True,
-    )
-    base.update(overrides)
-    return SimpleNamespace(**base)
-
-
-def test_collect_proxy_pool_merges_sources(tmp_path: Path) -> None:
-    f = tmp_path / "p.txt"
-    f.write_text("http://file1\nhttp://file2\n")
-    args = _ns(
-        proxy="http://single",
-        proxy_pool="http://pool1, http://pool2",
-        proxy_file=str(f),
-    )
-    assert _collect_proxy_pool(args) == (
-        "http://pool1",
-        "http://pool2",
-        "http://file1",
-        "http://file2",
-        "http://single",
-    )
-
-
-def test_collect_proxy_pool_dedupes() -> None:
-    args = _ns(proxy="http://same", proxy_pool="http://same, http://other")
-    assert _collect_proxy_pool(args) == ("http://same", "http://other")
-
-
-def test_scan_config_carries_pool_through_from_args() -> None:
-    args = _ns(proxy_pool="http://a,http://b")
-    cfg = ScanConfig.from_args(args, username="x")
-    assert cfg.proxies == ("http://a", "http://b")
 
 
 # ── HTTPClient integration ─────────────────────────────────────────

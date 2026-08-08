@@ -8,7 +8,7 @@ exposes hook points the plugin can subscribe to — currently only
 Plugins are discovered from (in order):
 
 1. ``./plugins/`` relative to the working directory
-2. ``~/.cyberm4fia/plugins/``
+2. ``~/.config/open-source-intelligence/plugins/``
 3. Any extra paths passed explicitly to :func:`load_plugins`
 
 We deliberately keep the API minimal — a plugin that just wants to
@@ -60,7 +60,7 @@ class PluginRegistry:
 
 DEFAULT_PLUGIN_DIRS: tuple[Path, ...] = (
     Path.cwd() / "plugins",
-    Path.home() / ".cyberm4fia" / "plugins",
+    Path.home() / ".config" / "open-source-intelligence" / "plugins",
 )
 
 
@@ -85,7 +85,7 @@ def load_plugins(
     registry = registry or PluginRegistry()
     dirs = list(DEFAULT_PLUGIN_DIRS) + list(extra_dirs or ())
     for path in _iter_plugin_files(dirs):
-        module_name = f"cyberm4fia_plugin_{path.stem}"
+        module_name = f"open_source_intelligence_plugin_{path.stem}"
         try:
             spec = importlib.util.spec_from_file_location(module_name, path)
             if spec is None or spec.loader is None:

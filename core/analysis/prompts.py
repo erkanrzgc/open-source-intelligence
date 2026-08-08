@@ -80,7 +80,7 @@ def _trim_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "profile_data": _trim_profile(p.get("profile_data") or {}),
         }
         for p in payload.get("platforms", [])
-        if p.get("exists")
+        if isinstance(p, dict) and p.get("exists")
     ]
     emails = [
         {

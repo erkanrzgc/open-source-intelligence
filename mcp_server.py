@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal MCP (Model Context Protocol) stdio server for cyberm4fia-osint.
+"""Minimal MCP (Model Context Protocol) stdio server for Open Source Intelligence.
 
 Exposes a single tool, ``scan_username``, that runs a ScanConfig against
 the engine and returns the JSON payload. Implements just enough of MCP
@@ -29,7 +29,8 @@ from core.scan_service import complete_scan_result
 from utils.helpers import sanitize_username
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "cyberm4fia-osint", "version": "0.1.0"}
+SERVER_INFO = {"name": "open-source-intelligence", "version": "0.1.0"}
+_MAX_LINE_BYTES = 1_048_576  # 1 MiB stdin line limit
 
 TOOLS = [
     {
@@ -322,14 +323,10 @@ async def _dispatch(request: dict) -> dict | None:
         try:
             arguments = params.get("arguments") or {}
             payload = await handler(arguments) if asyncio.iscoroutinefunction(handler) else handler(arguments)
-        except (ValueError, RuntimeError) as exc:
-            return _ok(
-                msg_id,
-                {
-                    "isError": True,
-                    "content": [{"type": "text", "text": f"error: {exc}"}],
-                },
-            )
+        except ValueError as exc:
+            return _err(msg_id, -32602, f"Invalid params: {exc}")
+        except RuntimeError as exc:
+            return _err(msg_id, -32603, f"Internal error: {exc}")
         return _ok(
             msg_id,
             {
@@ -349,18 +346,31 @@ async def _serve() -> None:
     reader = asyncio.StreamReader()
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
     while True:
-        line = await reader.readline()
+        line = await _readline_limited(reader, _MAX_LINE_BYTES)
         if not line:
             return
         try:
             request = json.loads(line.decode("utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             continue
         response = await _dispatch(request)
         if response is None:
             continue
         sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
         sys.stdout.flush()
+
+
+async def _readline_limited(reader: asyncio.StreamReader, limit: int) -> bytes | None:
+    """Read a newline-terminated line, bounded to *limit* bytes."""
+    buf = bytearray()
+    while len(buf) < limit:
+        chunk = await reader.read(1)
+        if not chunk:
+            return bytes(buf) if buf else None
+        if chunk == b"\n":
+            return bytes(buf)
+        buf.extend(chunk)
+    return bytes(buf)
 
 
 def main() -> None:

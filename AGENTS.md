@@ -1,4 +1,4 @@
-# AGENTS.md — cyberm4fia-osint architecture & skill registry
+# AGENTS.md — open-source-intelligence architecture & skill registry
 
 This file is the **architecture map and contract index** for the project.
 It complements `README.md` (which is end-user-facing) and is intended for
@@ -15,9 +15,9 @@ below).
 ## High-level flow
 
 ```
-┌─ CLI / FastAPI / MCP entrypoint ─────────────────────────────────────┐
-│   main.py | core/api/server.py | mcp_server.py                       │
-│   parse args / request → build ScanConfig (core/config.py)           │
+┌─ FastAPI / MCP / library entrypoint ─────────────────────────────────┐
+│   core/api/server.py | mcp_server.py | direct Python imports         │
+│   validate request → build ScanConfig (core/config.py)               │
 └──────────────────────────────────────────────────────────────────────┘
                           │ ScanConfig (frozen dataclass)
                           ▼
@@ -28,7 +28,7 @@ below).
                           │ ScanResult (mutable dataclass)
                           ▼
 ┌─ Reporters / persistence ────────────────────────────────────────────┐
-│   core/reporter/* — console UI, CSV, HTML, JSON                      │
+│   core/reporter/* — CSV, HTML, JSON, PDF, STIX, MISP                 │
 │   core/history.py — SQLite scan history                              │
 │   core/api/server.py — JSON response                                 │
 └──────────────────────────────────────────────────────────────────────┘
@@ -43,11 +43,11 @@ module that needs the wire goes through it — no module imports
 ## Engine phase order
 
 ```
-[0]  handle_resolve     — only when --name is set (resolves real name → handle)
+[0]  handle_resolve     — cfg.full_name resolves a real name → handle
 [1]  platform_check     — sweep 1924 platforms in parallel
      └─ per platform: get → final-URL check → soft-404 cache lookup →
         liveness scoring → FP filter
-[1.5] profile_validate  — opt-in (--ai-skills): LLM verdict for borderline matches
+[1.5] profile_validate  — cfg.ai_skills: LLM verdict for borderline matches
 [2]  deep_scrape        — hand-curated API/HTML parsers for ~12 sites
 [3]  smart_search       — username variations + linked-account discovery
 [4]  photo              — perceptual-hash avatar comparison (CPU-bound,
@@ -65,7 +65,7 @@ module that needs the wire goes through it — no module imports
 [+]  crypto             — BTC/ETH balance + tx lookup
 [+]  recon              — corporate red-team: email patterns + GitHub
                           org + subdomain enrichment + secret scanning
-[+]  gitleaks           — local repo secret scan (optional CLI list)
+[+]  gitleaks           — local repo secret scan (cfg.gitleaks_paths)
 [+]  exif               — image GPS/timestamp metadata
 [+]  wigle              — BSSID/SSID geolocation
 [+]  company            — OpenCorporates registry + officers
@@ -97,7 +97,7 @@ shell / wrong person" failure mode:
    looks like when the username does NOT exist". Fetched bodies are
    compared against this baseline; matches within Hamming distance ≤ 6
    are flagged as soft-404. Baselines auto-seed on first found match
-   (fire-and-forget) and live in `~/.cache/cyberm4fia/soft404/` for 7
+   (fire-and-forget) and live in `~/.cache/open-source-intelligence/soft404/` for 7
    days.
 
 3. **Profile liveness scoring** (`modules/profile_liveness.py`). After
@@ -111,8 +111,8 @@ Additionally:
 * **JS-wall auto-fallback** (`modules/stealth/js_wall.py`). When
   aiohttp's body looks like a Cloudflare challenge / DataDome page /
   empty `__NEXT_DATA__` shell, the engine automatically re-fetches via
-  Playwright (or Camoufox) — even if `--playwright` wasn't passed.
-  Disable with `--no-auto-render`.
+  the configured browser backend. Set `cfg.no_auto_render=True` to
+  disable this fallback.
 
 ---
 
@@ -129,8 +129,8 @@ Currently shipped skills:
 
 | Skill | Triggered by | Purpose |
 |---|---|---|
-| `handle_generator.md` | `--name` CLI flag, `_phase_handle_resolve` | Suggest 15 culturally-aware username candidates from a real name. |
-| `profile_validator.md` | `--ai-skills` + borderline confidence | Decide whether a borderline-scored profile belongs to the target. |
+| `handle_generator.md` | `cfg.full_name`, `_phase_handle_resolve` | Suggest 15 culturally-aware username candidates from a real name. |
+| `profile_validator.md` | `cfg.ai_skills` + borderline confidence | Decide whether a borderline-scored profile belongs to the target. |
 
 The legacy "exec summary" prompt in `core/analysis/prompts.py` will
 migrate to a `exec_summary.md` skill in a future change; today it is
@@ -151,10 +151,10 @@ called directly by `LLMAnalyzer.analyze()`.
 ### Budget & cost
 
 `cfg.ai_skill_budget` (default 20) caps total LLM calls per scan. The
-cache (`~/.cache/cyberm4fia/skills/`, 24 h TTL) eliminates repeat calls
+cache (`~/.cache/open-source-intelligence/skills/`, 24 h TTL) eliminates repeat calls
 for identical inputs. NVIDIA NIM is the default backend (free tier);
-override via `CYBERM4FIA_LLM_URL`, `CYBERM4FIA_LLM_MODEL`,
-`CYBERM4FIA_LLM_API_KEY`.
+override via `OSINT_LLM_URL`, `OSINT_LLM_MODEL`,
+`OSINT_LLM_API_KEY`.
 
 ---
 
@@ -169,7 +169,7 @@ name: <kebab-case identifier matching the module>
 description: <one-line summary, shown in indexes>
 inputs: <key: type pairs documenting the main entry function>
 outputs: <key: type pairs documenting the return value>
-triggers: <list of ScanConfig flags / CLI flags that activate this module>
+triggers: <list of ScanConfig fields / API inputs that activate this module>
 dependencies: <list of imports that this module depends on>
 ai_required: <true | false>
 ---
@@ -192,32 +192,37 @@ manual — the code is the source of truth.
 sanctioned way to drive a scan. Adding a new feature means:
 
 1. Add a field to `ScanConfig` (with a sensible default).
-2. Wire it through `ScanConfig.from_args()` so the CLI picks it up.
+2. Add the matching field and mapping to `core/api/server.py:ScanRequest`
+   and `_cfg_from_request`; expose it through MCP when that surface needs it.
 3. Reference it in the relevant engine phase. NEVER read `os.environ`
-   inside an engine phase — environment overrides live exclusively in
-   `core/config.py` so they show up in one place.
+   inside an engine phase. Process-level adapters own environment parsing;
+   request-tuning overrides belong in `core/config.py`.
 
 Environment overrides currently honoured (see `core/config.py`):
 
 ```
-CYBERM4FIA_MAX_CONCURRENT       (default 50)
-CYBERM4FIA_PER_HOST_CONCURRENCY (default 6)
-CYBERM4FIA_TIMEOUT              (default 15)
-CYBERM4FIA_RETRIES              (default 2)
-CYBERM4FIA_RETRY_DELAY          (default 1.0)
-CYBERM4FIA_RATE_LIMIT_DELAY     (default 0.1)
-CYBERM4FIA_INSECURE_TLS         (off)
-CYBERM4FIA_LLM_BACKEND          ("http", "llama_cpp")
-CYBERM4FIA_LLM_URL              (NVIDIA NIM by default)
-CYBERM4FIA_LLM_MODEL
-CYBERM4FIA_LLM_API_KEY
-CYBERM4FIA_LLM_CTX              (4096)
-CYBERM4FIA_LLM_MAX_TOKENS       (768)
-CYBERM4FIA_LLM_TEMPERATURE      (0.2)
-CYBERM4FIA_SKILL_CACHE          (~/.cache/cyberm4fia/skills)
-CYBERM4FIA_SKILL_CACHE_TTL      (86400)
-CYBERM4FIA_SOFT404_CACHE        (~/.cache/cyberm4fia/soft404)
-CYBERM4FIA_PLATFORMS_FILE       (override modules/platforms.yaml)
+OSINT_MAX_CONCURRENT       (default 50)
+OSINT_PER_HOST_CONCURRENCY (default 6)
+OSINT_TIMEOUT              (default 15)
+OSINT_RETRIES              (default 2)
+OSINT_RETRY_DELAY          (default 1.0)
+OSINT_RATE_LIMIT_DELAY     (default 0.1)
+OSINT_INSECURE_TLS         (off)
+OSINT_LOG_LEVEL            (default WARNING)
+OSINT_SCAN_JOB_MAX_JOBS    (default 100)
+OSINT_SCAN_JOB_CONCURRENCY (default 2)
+OSINT_SCAN_JOB_MAX_EVENTS  (default 500)
+OSINT_LLM_BACKEND          ("http", "llama_cpp")
+OSINT_LLM_URL              (NVIDIA NIM by default)
+OSINT_LLM_MODEL
+OSINT_LLM_API_KEY
+OSINT_LLM_CTX              (4096)
+OSINT_LLM_MAX_TOKENS       (768)
+OSINT_LLM_TEMPERATURE      (0.2)
+OSINT_SKILL_CACHE          (~/.cache/open-source-intelligence/skills)
+OSINT_SKILL_CACHE_TTL      (86400)
+OSINT_SOFT404_CACHE        (~/.cache/open-source-intelligence/soft404)
+OSINT_PLATFORMS_FILE       (override modules/platforms.yaml)
 ```
 
 ---
@@ -246,8 +251,8 @@ Pre-existing tests must stay green. Run the full suite before pushing:
 |---|---|
 | Scan returns no platforms | `_phase_platform_check`, `fp_threshold`, `MAX_CONCURRENT` |
 | "Found" platform 404s when clicked | `_looks_redirected_off`, soft-404 cache, `profile_liveness` |
-| Cloudflare blocks half the scan | `js_wall.looks_like_js_wall`, ensure `--no-auto-render` is NOT set, playwright installed |
-| `--name "X Y"` finds nothing | `modules/recon/handle_generator.py`, then `_HANDLE_PROBE_PLATFORMS` in engine |
-| `--email-only foo@x.com` returns empty | `_phase_email_breach` flag-gating, NVIDIA/HIBP env vars |
-| LLM call rejected | `core/analysis/llm.py:HttpBackend`, `CYBERM4FIA_LLM_API_KEY` |
+| Cloudflare blocks half the scan | `js_wall.looks_like_js_wall`, ensure `cfg.no_auto_render` is false and a browser backend is installed |
+| `full_name="X Y"` finds nothing | `modules/recon/handle_generator.py`, then `_HANDLE_PROBE_PLATFORMS` in engine |
+| `email_only="foo@x.com"` returns empty | `_phase_email_breach` flag-gating, NVIDIA/HIBP env vars |
+| LLM call rejected | `core/analysis/llm.py:HttpBackend`, `OSINT_LLM_API_KEY` |
 | Skill schema mismatch | `core/analysis/skill_loader.py:_validate_against_schema` |

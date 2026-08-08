@@ -2,23 +2,26 @@
 
 The scan engine emits named events (``phase_start``, ``phase_end``,
 ``hit``, ``error``, ``done``) to a contextvar-bound emitter. Anyone
-consuming a scan — the SSE endpoint, a CLI progress bar, a test — can
+consuming a scan — the SSE endpoint, a job worker, or a test — can
 attach an :class:`asyncio.Queue` to the emitter to receive events as
 they happen.
 
 Keeping this in its own tiny module avoids pulling FastAPI into the
-engine and lets the CLI stay synchronous by default.
+engine.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
+log = logging.getLogger(__name__)
+
 _current: ContextVar["ProgressEmitter | None"] = ContextVar(
-    "cyberm4fia_progress", default=None
+    "osint_progress", default=None
 )
 
 
@@ -60,7 +63,10 @@ class ProgressEmitter:
 
     def emit(self, event: ProgressEvent) -> None:
         for q in list(self._subs):
-            q.put_nowait(event)
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                log.debug("progress subscriber queue full, dropping event %s", event.kind)
 
     def emit_error(self, message: str) -> None:
         self.emit(ProgressEvent(kind="error", phase="error", message=message))
@@ -71,7 +77,10 @@ class ProgressEmitter:
     def close(self) -> None:
         """Signal end-of-stream to every subscriber."""
         for q in list(self._subs):
-            q.put_nowait(None)
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                log.debug("progress subscriber queue full during close, dropping sentinel")
 
 
 def set_emitter(emitter: ProgressEmitter | None) -> None:
@@ -85,8 +94,8 @@ def get_emitter() -> ProgressEmitter | None:
 def emit(kind: str, **fields: Any) -> None:
     """Fire a :class:`ProgressEvent` on the current emitter, if any.
 
-    No-op when no emitter is set (the default for CLI scans), so phases
-    never need to know whether anyone is listening.
+    No-op when no emitter is set, so phases never need to know whether
+    anyone is listening.
     """
     e = _current.get()
     if e is None:

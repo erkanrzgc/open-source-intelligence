@@ -32,7 +32,7 @@ ai_required: false
   fires off `_seed_soft_404_baseline(...)` as a background task (not
   awaited during the scan; awaited at scan end with 5 s timeout).
 * The seed task fetches the URL with `IMPOSSIBLE_USERNAME` and stores
-  the fingerprint to `~/.cache/cyberm4fia/soft404/<slug>.json`.
+  the fingerprint to `~/.cache/open-source-intelligence/soft404/<slug>.json`.
 * Baselines expire after 7 days (`_BASELINE_TTL_SECONDS`).
 
 ## False positives we accept

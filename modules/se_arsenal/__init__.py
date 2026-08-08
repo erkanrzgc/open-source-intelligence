@@ -8,6 +8,6 @@ red-team operator needs after enumeration is done:
 * ``gophish_client`` — push target groups into an existing GoPhish server
 * ``pretext``       — LLM-driven personalized phishing email drafts
 
-The package is opt-in: nothing here runs during a normal scan. Use the
-``--se-arsenal`` CLI flag or the standalone entrypoint.
+The package is opt-in: nothing here runs during a normal scan. Import
+the required module explicitly from an authorized integration.
 """

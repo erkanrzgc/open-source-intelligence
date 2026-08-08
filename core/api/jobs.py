@@ -57,6 +57,14 @@ class ScanJob:
             q.put_nowait(event)
 
     def subscribe(self) -> tuple[asyncio.Queue[dict[str, Any] | None], int]:
+        """Register a subscriber and return (queue, cursor).
+
+        *queue* receives real-time events and a None sentinel on job completion.
+        *cursor* is the current length of ``self.events`` — the caller can
+        replay ``events[cursor:]`` as backlog, then drain the queue for
+        live events.  A brief window of duplicate delivery is possible but
+        harmless in practice.
+        """
         q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._subs.append(q)
         if self.finished_at is not None:
@@ -102,11 +110,11 @@ class ScanJobStore:
     ) -> None:
         self._runner = runner
         self._jobs: dict[str, ScanJob] = {}
-        self._max_jobs = max_jobs or _env_int("CYBERM4FIA_SCAN_JOB_MAX_JOBS", 100)
+        self._max_jobs = max_jobs or _env_int("OSINT_SCAN_JOB_MAX_JOBS", 100)
         self._max_events_per_job = max_events_per_job or _env_int(
-            "CYBERM4FIA_SCAN_JOB_MAX_EVENTS", 500
+            "OSINT_SCAN_JOB_MAX_EVENTS", 500
         )
-        concurrency = max_concurrent or _env_int("CYBERM4FIA_SCAN_JOB_CONCURRENCY", 2)
+        concurrency = max_concurrent or _env_int("OSINT_SCAN_JOB_CONCURRENCY", 2)
         self._semaphore = asyncio.Semaphore(concurrency)
 
     def create_job(
@@ -229,6 +237,7 @@ class ScanJobStore:
                     await forwarder
                 emitter.unsubscribe(queue)
                 job.finished_at = int(time.time())
+                job._task = None
                 job.publish(
                     {
                         "kind": "job_finished",

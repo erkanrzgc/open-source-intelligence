@@ -77,3 +77,5 @@ models/
 
 # Generated assets (too large for git)
 osint_icon_base64.txt
+log/
+results/

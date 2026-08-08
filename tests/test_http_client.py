@@ -103,12 +103,12 @@ def test_socks_proxy_not_returned_per_request():
 
 
 def test_tls_verification_is_on_by_default(monkeypatch):
-    monkeypatch.delenv("CYBERM4FIA_INSECURE_TLS", raising=False)
+    monkeypatch.delenv("OSINT_INSECURE_TLS", raising=False)
     client = HTTPClient()
     assert client._verify_tls is True
 
 
 def test_tls_verification_can_be_disabled_by_env(monkeypatch):
-    monkeypatch.setenv("CYBERM4FIA_INSECURE_TLS", "1")
+    monkeypatch.setenv("OSINT_INSECURE_TLS", "1")
     client = HTTPClient()
     assert client._verify_tls is False

@@ -1,4 +1,4 @@
-"""Runtime capability discovery for optional cyberm4fia features."""
+"""Runtime capability discovery for optional open-source-intelligence features."""
 
 from __future__ import annotations
 
@@ -74,11 +74,11 @@ def collect_capabilities() -> dict[str, dict[str, Any]]:
     llama_cpp_installed = _has_module("llama_cpp")
     llm_model_path = Path(
         os.environ.get(
-            "CYBERM4FIA_MODEL_CACHE",
-            str(Path.home() / ".cache" / "cyberm4fia" / "models"),
+            "OSINT_MODEL_CACHE",
+            str(Path.home() / ".cache" / "open-source-intelligence" / "models"),
         )
     ) / os.environ.get(
-        "CYBERM4FIA_LLM_FILE",
+        "OSINT_LLM_FILE",
         "foundation-sec-1.1-8b-instruct-q4_k_m.gguf",
     )
 
@@ -161,7 +161,7 @@ def collect_capabilities() -> dict[str, dict[str, Any]]:
             reason=(
                 ""
                 if obscura_fallback.is_available()
-                else "obscura binary not found; set CYBERM4FIA_OBSCURA_BIN or install obscura"
+                else "obscura binary not found; set OSINT_OBSCURA_BIN or install obscura"
             ),
         ),
         "filetype_magika": _capability(
@@ -173,7 +173,7 @@ def collect_capabilities() -> dict[str, dict[str, Any]]:
             reason=(
                 ""
                 if gitleaks_ok
-                else "gitleaks binary not found; set CYBERM4FIA_GITLEAKS_BIN or install gitleaks"
+                else "gitleaks binary not found; set OSINT_GITLEAKS_BIN or install gitleaks"
             ),
         ),
         "tor_transport": _capability(
@@ -217,9 +217,9 @@ def collect_capabilities() -> dict[str, dict[str, Any]]:
         ),
         "llm_http": _capability(
             available=True,
-            configured=_env_enabled("CYBERM4FIA_LLM_URL")
-            or "CYBERM4FIA_LLM_URL" not in os.environ,
-            reason="HTTP backend uses default local URL" if not _env_enabled("CYBERM4FIA_LLM_URL") else "",
+            configured=_env_enabled("OSINT_LLM_URL")
+            or "OSINT_LLM_URL" not in os.environ,
+            reason="HTTP backend uses default local URL" if not _env_enabled("OSINT_LLM_URL") else "",
         ),
         "llm_llama_cpp": _capability(
             available=llama_cpp_installed,

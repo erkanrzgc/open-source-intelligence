@@ -34,7 +34,7 @@ ai_required: false
   `HTTPClient`.
 * `playwright_fallback` / `obscura_fallback` only run when:
   - the platform is flagged `js_heavy: true` in `modules/platforms.yaml`, OR
-  - `--playwright` is set (renders everything), OR
+  - `cfg.playwright` is true (renders everything), OR
   - `js_wall.looks_like_js_wall(...)` says the aiohttp body is a wall.
 * `soft_404` runs after every status-type platform match.
 

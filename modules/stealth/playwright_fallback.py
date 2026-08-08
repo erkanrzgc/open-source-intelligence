@@ -112,5 +112,5 @@ async def fetch_rendered(
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - fallback must not crash scan
-        log.warning("playwright render failed for %s: %s", url, exc)
+        log.debug("playwright render failed for %s: %s", url, exc)
         return None

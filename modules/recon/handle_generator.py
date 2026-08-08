@@ -1,6 +1,6 @@
 """Generate plausible usernames from a real name.
 
-Used by the ``--name`` CLI mode. Given a full name like "Erkan Rizgic" we
+Used when ``ScanConfig.full_name`` is set. Given a full name like "Erkan Rizgic" we
 emit ~20 candidate handles ordered by likelihood, then the scan engine
 runs each one through the standard platform sweep. The top FP-scored
 hits across all candidates are presented to the user as a ranked list.

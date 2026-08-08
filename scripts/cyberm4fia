@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# Quick launcher — symlink this into ~/bin or /usr/local/bin:
-#   sudo ln -sf "$(pwd)/scripts/cyberm4fia" /usr/local/bin/cyberm4fia
-# Then: cyberm4fia <username>
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-exec python3 "$SCRIPT_DIR/main.py" "$@"

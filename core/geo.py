@@ -23,9 +23,9 @@ from typing import Iterable
 
 log = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "cyberm4fia" / "geocache.sqlite3"
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "open-source-intelligence" / "geocache.sqlite3"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-USER_AGENT = "cyberm4fia-osint/0.3 (https://github.com/cyberm4fia)"
+USER_AGENT = "open-source-intelligence/0.3 (https://github.com/erkanrzgc/open-source-intelligence)"
 MIN_INTERVAL_S = 1.05  # Nominatim: ≤ 1 req / sec
 
 _SCHEMA = """
@@ -66,6 +66,7 @@ class GeoPoint:
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
     return conn
 
@@ -262,7 +263,7 @@ async def geocode_many(
                 )
                 continue
             # enforce spacing between actual network calls
-            gap = time.monotonic() - last_net_call
+            gap = max(0.0, time.monotonic() - last_net_call)
             if gap < rate_limit_s:
                 await asyncio.sleep(rate_limit_s - gap)
             point = await geocode(

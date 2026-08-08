@@ -9,7 +9,7 @@ def cross_reference(found_platforms: list[PlatformResult]) -> CrossReferenceResu
     if len(profiles_with_data) < 2:
         return CrossReferenceResult(
             confidence=0.0,
-            notes=["Yeterli profil verisi yok (en az 2 derin tarama gerektiriyor)"],
+            notes=["Insufficient profile data (requires at least 2 deep-scraped profiles)"],
         )
 
     names: dict[str, list[str]] = {}
@@ -121,7 +121,7 @@ def cross_reference(found_platforms: list[PlatformResult]) -> CrossReferenceResu
                         score += 30
                         linked_found = True
                         notes.append(
-                            f"Keybase kaniti: {proof.get('service')} → '{proof_name}'"
+                            f"Keybase proof: {proof.get('service')} → '{proof_name}'"
                         )
                         break
             if linked_found:

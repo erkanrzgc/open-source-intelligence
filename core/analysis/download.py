@@ -22,8 +22,8 @@ def download(repo_id: str, filename: str, dest_dir: Path) -> Path:
     try:
         from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
     except ImportError as exc:
-        raise SystemExit(
-            "huggingface_hub is not installed. Install with: pip install 'cyberm4fia-osint[ai]'"
+        raise ImportError(
+            "huggingface_hub is not installed. Install with: pip install 'open-source-intelligence[ai]'"
         ) from exc
     dest_dir.mkdir(parents=True, exist_ok=True)
     print(f"[*] downloading {repo_id}/{filename} -> {dest_dir}")
@@ -36,14 +36,18 @@ def download(repo_id: str, filename: str, dest_dir: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="cyberm4fia-download-model")
+    parser = argparse.ArgumentParser(prog="open-source-intelligence-download-model")
     parser.add_argument("--repo", default=DEFAULT_REPO_ID, help="HF repo id")
     parser.add_argument("--file", default=DEFAULT_MODEL_FILE, help="GGUF filename")
     parser.add_argument(
         "--dest", type=Path, default=DEFAULT_CACHE_DIR, help="Destination directory"
     )
     args = parser.parse_args(argv)
-    path = download(args.repo, args.file, args.dest)
+    try:
+        path = download(args.repo, args.file, args.dest)
+    except ImportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     print(f"[+] saved: {path}")
     return 0
 

@@ -6,7 +6,7 @@ outputs: ScanResult (mutable dataclass) — see core/models.py
 triggers: always — this is the engine.
 dependencies:
   - aiohttp, aiohttp-socks (when tor=True)
-  - rich (console reporter)
+  - rich (shared exporter/diagnostic console)
   - all modules under modules/* are orchestrated from here
 ai_required: false  # individual phases may opt into LLM via core/analysis/skills
 ---
@@ -24,7 +24,7 @@ core/
 ├── smart_search.py         # username variation generator
 ├── plugins.py              # third-party plugin loader
 ├── progress.py             # event emitter for live UI
-├── reporter/               # console UI, CSV, HTML
+├── reporter/               # CSV, HTML, JSON, PDF, STIX, MISP
 ├── api/                    # FastAPI server + job queue
 ├── analysis/               # LLM analyzer + skill registry
 ├── history.py              # SQLite scan history
@@ -42,10 +42,11 @@ core/
 ## ScanConfig — the single source of truth
 
 Every scan setting is a field on the frozen `ScanConfig` dataclass.
-Adding a new scan-time flag means:
+Adding a new scan-time setting means:
 
 1. Add the field with a sensible default.
-2. Wire `ScanConfig.from_args()` to read the argparse Namespace.
+2. Map it through `core.api.server.ScanRequest` and `_cfg_from_request`;
+   expose it through MCP when required.
 3. The engine reads `cfg.<your_field>` — never `os.environ`.
 
 Environment overrides live in `core/config.py` constants

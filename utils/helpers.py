@@ -9,7 +9,7 @@ _PROFILE_PATH_PREFIXES = ("in", "u", "user", "users", "profile", "@")
 
 
 def sanitize_username(username: str) -> str:
-    """Normalize a CLI/MCP username argument.
+    """Normalize a username supplied through an API, MCP, or library call.
 
     Accepts either a bare handle (`alice`, `@alice`, `erkan.rzgc`) or a
     profile URL (`https://github.com/erkanrzgc`, `twitter.com/erkanrzgc`).

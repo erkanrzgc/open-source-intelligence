@@ -69,45 +69,45 @@ async def test_notify_all_empty_sinks_returns_empty():
 
 
 def test_telegram_from_env_none_without_credentials(monkeypatch):
-    monkeypatch.delenv("CYBERM4FIA_TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("CYBERM4FIA_TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("OSINT_TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("OSINT_TELEGRAM_CHAT_ID", raising=False)
     assert TelegramNotifier.from_env() is None
 
 
 def test_telegram_from_env_builds_when_set(monkeypatch):
-    monkeypatch.setenv("CYBERM4FIA_TELEGRAM_BOT_TOKEN", "abc")
-    monkeypatch.setenv("CYBERM4FIA_TELEGRAM_CHAT_ID", "123")
+    monkeypatch.setenv("OSINT_TELEGRAM_BOT_TOKEN", "abc")
+    monkeypatch.setenv("OSINT_TELEGRAM_CHAT_ID", "123")
     n = TelegramNotifier.from_env()
     assert isinstance(n, TelegramNotifier)
     assert n.name == "telegram"
 
 
 def test_webhook_from_env_none_without_url(monkeypatch):
-    monkeypatch.delenv("CYBERM4FIA_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("OSINT_WEBHOOK_URL", raising=False)
     assert WebhookNotifier.from_env() is None
 
 
 def test_webhook_from_env_builds_when_set(monkeypatch):
-    monkeypatch.setenv("CYBERM4FIA_WEBHOOK_URL", "https://example.com/hook")
-    monkeypatch.setenv("CYBERM4FIA_WEBHOOK_SECRET", "s3cret")
+    monkeypatch.setenv("OSINT_WEBHOOK_URL", "https://example.com/hook")
+    monkeypatch.setenv("OSINT_WEBHOOK_SECRET", "s3cret")
     n = WebhookNotifier.from_env()
     assert isinstance(n, WebhookNotifier)
     assert n._secret == "s3cret"
 
 
 def test_build_default_notifiers_picks_up_configured_sinks(monkeypatch):
-    monkeypatch.delenv("CYBERM4FIA_TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("CYBERM4FIA_TELEGRAM_CHAT_ID", raising=False)
-    monkeypatch.setenv("CYBERM4FIA_WEBHOOK_URL", "https://example.com/hook")
+    monkeypatch.delenv("OSINT_TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("OSINT_TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("OSINT_WEBHOOK_URL", "https://example.com/hook")
     sinks = build_default_notifiers()
     assert [s.name for s in sinks] == ["webhook"]
 
 
 def test_build_default_notifiers_empty_when_nothing_configured(monkeypatch):
     for var in (
-        "CYBERM4FIA_TELEGRAM_BOT_TOKEN",
-        "CYBERM4FIA_TELEGRAM_CHAT_ID",
-        "CYBERM4FIA_WEBHOOK_URL",
+        "OSINT_TELEGRAM_BOT_TOKEN",
+        "OSINT_TELEGRAM_CHAT_ID",
+        "OSINT_WEBHOOK_URL",
     ):
         monkeypatch.delenv(var, raising=False)
     assert build_default_notifiers() == []

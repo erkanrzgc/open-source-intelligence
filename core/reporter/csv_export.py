@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.models import ScanResult
-from core.reporter.console_ui import console
+from core.reporter.console import console
 
 try:
     from openpyxl import Workbook

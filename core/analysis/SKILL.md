@@ -8,13 +8,12 @@ outputs:
   AIReport: {identity_summary, strong_linkages, exposures, next_steps, confidence}
   per-skill: structured JSON validated against skills/<name>.md output_schema
 triggers:
-  - --ai-summary / --ai-analysis CLI flags → LLMAnalyzer.analyze()
-  - --ai-skills CLI flag → engine phases call run_skill()
   - cfg.ai_skills in ScanConfig
+  - direct library consumers may call LLMAnalyzer.analyze()
 dependencies:
   - core.http_client (NOT directly — HttpBackend uses urllib)
   - llama-cpp-python (optional, for local GGUF backend)
-  - CYBERM4FIA_LLM_* env vars
+  - OSINT_LLM_* env vars
 ai_required: true
 ---
 
@@ -36,9 +35,9 @@ core/analysis/
 ### 1. Monolithic exec summary (legacy)
 
 `LLMAnalyzer.from_env()` builds a single backend and calls
-`analyze(scan_payload)` which returns an `AIReport`. Used by
-`main.py:_run_ai_analysis` and the `--ai-summary` flag. This path
-predates the skill registry and should migrate to a
+`analyze(scan_payload)` which returns an `AIReport`. It remains available
+for direct library integrations but is not invoked automatically by the
+engine. This path predates the skill registry and should migrate to a
 `skills/exec_summary.md` in a future change.
 
 ### 2. Skill registry (current)
@@ -63,8 +62,8 @@ the parsed Skill object and the (skill, inputs)-keyed response.
 
 | Backend | When | Activation |
 |---|---|---|
-| HttpBackend | default | `CYBERM4FIA_LLM_BACKEND=http` (NVIDIA NIM, OpenAI, vLLM, llama.cpp server). `CYBERM4FIA_LLM_URL`, `CYBERM4FIA_LLM_MODEL`, `CYBERM4FIA_LLM_API_KEY`. |
-| LlamaCppBackend | offline use | `CYBERM4FIA_LLM_BACKEND=llama_cpp`, GGUF in `~/.cache/cyberm4fia/models/`. |
+| HttpBackend | default | `OSINT_LLM_BACKEND=http` (NVIDIA NIM, OpenAI, vLLM, llama.cpp server). `OSINT_LLM_URL`, `OSINT_LLM_MODEL`, `OSINT_LLM_API_KEY`. |
+| LlamaCppBackend | offline use | `OSINT_LLM_BACKEND=llama_cpp`, GGUF in `~/.cache/open-source-intelligence/models/`. |
 
 ## Failure modes
 

@@ -288,25 +288,29 @@ def _match_names(a: set[str], b: set[str]) -> list[MatchSignal]:
                 b_value=b_lower[key],
             )
         )
-    # Fuzzy pass, but only for names we haven't already matched exactly.
+    # Fuzzy pass — find best match per left-hand name.
     for an in a_lower:
         if an in exact:
             continue
+        best_ratio = 0.0
+        best_bn = ""
         for bn in b_lower:
             if bn in exact:
                 continue
             ratio = SequenceMatcher(None, an, bn).ratio()
-            if ratio >= NAME_FUZZY_MIN:
-                signals.append(
-                    MatchSignal(
-                        kind="name",
-                        weight=WEIGHT_NAME_FUZZY,
-                        detail=f"display name similar ({ratio:.2f})",
-                        a_value=a_lower[an],
-                        b_value=b_lower[bn],
-                    )
+            if ratio >= NAME_FUZZY_MIN and ratio > best_ratio:
+                best_ratio = ratio
+                best_bn = bn
+        if best_bn:
+            signals.append(
+                MatchSignal(
+                    kind="name",
+                    weight=WEIGHT_NAME_FUZZY,
+                    detail=f"display name similar ({best_ratio:.2f})",
+                    a_value=a_lower[an],
+                    b_value=b_lower[best_bn],
                 )
-                break  # one fuzzy hit per left-hand name is enough
+            )
     return signals
 
 

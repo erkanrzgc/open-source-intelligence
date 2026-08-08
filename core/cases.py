@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "cyberm4fia" / "cases.sqlite3"
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "open-source-intelligence" / "cases.sqlite3"
 
 VALID_STATUSES = frozenset({"open", "closed", "archived"})
 VALID_BOOKMARK_TYPES = frozenset(
@@ -125,6 +125,7 @@ class CaseBookmark:
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
     return conn

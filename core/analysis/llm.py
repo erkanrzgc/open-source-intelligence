@@ -17,11 +17,11 @@ import json
 import logging
 import os
 import re
-import urllib.error
-import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+import aiohttp
 
 from core.analysis.prompts import SYSTEM_PROMPT, build_user_prompt
 
@@ -29,35 +29,35 @@ log = logging.getLogger(__name__)
 
 
 DEFAULT_REPO_ID = os.environ.get(
-    "CYBERM4FIA_LLM_REPO",
+    "OSINT_LLM_REPO",
     "fdtn-ai/Foundation-Sec-1.1-8B-Instruct-Q4_K_M-GGUF",
 )
 DEFAULT_MODEL_FILE = os.environ.get(
-    "CYBERM4FIA_LLM_FILE",
+    "OSINT_LLM_FILE",
     "foundation-sec-1.1-8b-instruct-q4_k_m.gguf",
 )
 DEFAULT_CACHE_DIR = Path(
     os.environ.get(
-        "CYBERM4FIA_MODEL_CACHE",
-        str(Path.home() / ".cache" / "cyberm4fia" / "models"),
+        "OSINT_MODEL_CACHE",
+        str(Path.home() / ".cache" / "open-source-intelligence" / "models"),
     )
 )
 
-DEFAULT_CTX = int(os.environ.get("CYBERM4FIA_LLM_CTX", "4096"))
-DEFAULT_MAX_TOKENS = int(os.environ.get("CYBERM4FIA_LLM_MAX_TOKENS", "768"))
-DEFAULT_TEMPERATURE = float(os.environ.get("CYBERM4FIA_LLM_TEMPERATURE", "0.2"))
-DEFAULT_GPU_LAYERS = int(os.environ.get("CYBERM4FIA_LLM_GPU_LAYERS", "-1"))
+DEFAULT_CTX = int(os.environ.get("OSINT_LLM_CTX", "4096"))
+DEFAULT_MAX_TOKENS = int(os.environ.get("OSINT_LLM_MAX_TOKENS", "768"))
+DEFAULT_TEMPERATURE = float(os.environ.get("OSINT_LLM_TEMPERATURE", "0.2"))
+DEFAULT_GPU_LAYERS = int(os.environ.get("OSINT_LLM_GPU_LAYERS", "-1"))
 
-DEFAULT_BACKEND = os.environ.get("CYBERM4FIA_LLM_BACKEND", "http").lower()
+DEFAULT_BACKEND = os.environ.get("OSINT_LLM_BACKEND", "http").lower()
 DEFAULT_HTTP_URL = os.environ.get(
-    "CYBERM4FIA_LLM_URL",
+    "OSINT_LLM_URL",
     "https://integrate.api.nvidia.com/v1/chat/completions",
 )
 DEFAULT_HTTP_MODEL = os.environ.get(
-    "CYBERM4FIA_LLM_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct"
+    "OSINT_LLM_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct"
 )
-DEFAULT_HTTP_API_KEY = os.environ.get("CYBERM4FIA_LLM_API_KEY", "")
-DEFAULT_HTTP_TIMEOUT = float(os.environ.get("CYBERM4FIA_LLM_TIMEOUT", "120"))
+DEFAULT_HTTP_API_KEY = os.environ.get("OSINT_LLM_API_KEY", "")
+DEFAULT_HTTP_TIMEOUT = float(os.environ.get("OSINT_LLM_TIMEOUT", "120"))
 
 
 class LLMUnavailable(RuntimeError):
@@ -77,7 +77,7 @@ class AIReport:
 
 
 class Backend(Protocol):
-    def complete(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str: ...
+    async def complete(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str: ...
 
 
 class LlamaCppBackend:
@@ -88,7 +88,7 @@ class LlamaCppBackend:
             from llama_cpp import Llama  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover — exercised only with the extra installed
             raise LLMUnavailable(
-                "llama-cpp-python is not installed. Install with: pip install 'cyberm4fia-osint[ai]'"
+                "llama-cpp-python is not installed. Install with: pip install 'open-source-intelligence[ai]'"
             ) from exc
         if not model_path.exists():
             raise LLMUnavailable(
@@ -103,7 +103,14 @@ class LlamaCppBackend:
             verbose=False,
         )
 
-    def complete(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str:
+    async def complete(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str:
+        import asyncio
+        result = await asyncio.to_thread(
+            self._complete_sync, system, user, max_tokens=max_tokens, temperature=temperature,
+        )
+        return result
+
+    def _complete_sync(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str:
         result = self._llm.create_chat_completion(
             messages=[
                 {"role": "system", "content": system},
@@ -138,7 +145,7 @@ class HttpBackend:
         self._api_key = api_key
         self._timeout = timeout
 
-    def complete(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str:
+    async def complete(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str:
         payload: dict[str, Any] = {
             "messages": [
                 {"role": "system", "content": system},
@@ -150,15 +157,15 @@ class HttpBackend:
         }
         if self._model:
             payload["model"] = self._model
-        data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        req = urllib.request.Request(self._url, data=data, headers=headers, method="POST")
+        timeout = aiohttp.ClientTimeout(total=self._timeout)
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
-                body = resp.read().decode("utf-8")
-        except urllib.error.URLError as exc:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(self._url, json=payload, headers=headers) as resp:
+                    body = await resp.text()
+        except aiohttp.ClientError as exc:
             raise LLMUnavailable(f"HTTP LLM request failed: {exc}") from exc
         try:
             result = json.loads(body)
@@ -206,16 +213,16 @@ class LLMAnalyzer:
             )
         else:
             raise LLMUnavailable(
-                f"Unknown CYBERM4FIA_LLM_BACKEND={backend_kind!r} "
+                f"Unknown OSINT_LLM_BACKEND={backend_kind!r} "
                 "(expected one of: http, llama_cpp)"
             )
         return cls(backend)
 
-    def analyze(self, scan_payload: dict[str, Any]) -> AIReport:
+    async def analyze(self, scan_payload: dict[str, Any]) -> AIReport:
         if self._backend is None:
             raise LLMUnavailable("LLMAnalyzer has no backend — call from_env() or inject one")
         user_prompt = build_user_prompt(scan_payload)
-        raw = self._backend.complete(
+        raw = await self._backend.complete(
             SYSTEM_PROMPT,
             user_prompt,
             max_tokens=self._max_tokens,

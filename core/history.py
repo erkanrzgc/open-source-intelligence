@@ -15,7 +15,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "cyberm4fia" / "history.sqlite3"
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "open-source-intelligence" / "history.sqlite3"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS scans (
@@ -26,7 +26,16 @@ CREATE TABLE IF NOT EXISTS scans (
     payload     TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scans_username_ts ON scans(username, ts DESC);
+CREATE TABLE IF NOT EXISTS _migrations (
+    version     INTEGER PRIMARY KEY,
+    applied_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
 """
+
+# Ordered list of migration SQL statements.
+# Append new entries here when schema changes; the version number
+# is the 1-based index in this list.
+_MIGRATIONS: list[str] = []
 
 
 @dataclass
@@ -49,8 +58,22 @@ class HistoryEntry:
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
+    _run_migrations(conn)
     return conn
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Apply any pending schema migrations."""
+    applied = set(
+        conn.execute("SELECT version FROM _migrations").fetchall()
+    )
+    for idx, sql in enumerate(_MIGRATIONS, start=1):
+        if (idx,) not in applied:
+            conn.executescript(sql)
+            conn.execute("INSERT OR IGNORE INTO _migrations (version) VALUES (?)", (idx,))
+            log.info("history: applied migration %d", idx)
 
 
 def save_scan(payload: dict, *, ts: int, db_path: Path = DEFAULT_DB_PATH) -> int:

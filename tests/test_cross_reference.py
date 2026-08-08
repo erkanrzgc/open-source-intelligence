@@ -18,7 +18,7 @@ class TestCrossReference:
     def test_insufficient_data(self):
         result = cross_reference([])
         assert result.confidence == 0.0
-        assert "Yeterli profil" in result.notes[0]
+        assert "Insufficient profile" in result.notes[0]
 
     def test_single_profile(self):
         result = cross_reference([_profile("gh", "https://a", name="A")])

@@ -71,6 +71,8 @@ def test_export_html_escapes_username_and_renders_sections(tmp_path):
     export_html(result, str(report))
     html = report.read_text(encoding="utf-8")
 
+    assert "<title>Open Source Intelligence" in html
+    assert "<h1>OPEN SOURCE INTELLIGENCE</h1>" in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>alert(1)</script>" not in html
     for section in (

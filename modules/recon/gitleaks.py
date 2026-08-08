@@ -27,7 +27,7 @@ _DEFAULT_TIMEOUT = 120
 
 
 def _binary_path(binary: str | None = None) -> str | None:
-    configured = (binary or os.environ.get("CYBERM4FIA_GITLEAKS_BIN", "")).strip()
+    configured = (binary or os.environ.get("OSINT_GITLEAKS_BIN", "")).strip()
     if configured:
         path = Path(configured).expanduser()
         if path.is_file():
@@ -157,7 +157,7 @@ async def scan_path(
         log.warning("gitleaks source path does not exist: %s", source)
         return []
 
-    with tempfile.TemporaryDirectory(prefix="cyberm4fia-gitleaks-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="open-source-intelligence-gitleaks-") as tmp:
         report_path = Path(tmp) / "gitleaks.json"
         cmd = [
             exe,

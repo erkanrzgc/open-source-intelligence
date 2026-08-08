@@ -7,7 +7,6 @@ inputs:
 outputs:
   PhoneIntel: {e164, national, country_code, country_name, region, carrier, line_type, timezones, valid, possible, sources, metadata}
 triggers:
-  - --phone CLI flag
   - cfg.phone non-empty in ScanConfig
 dependencies:
   - phonenumbers package

@@ -1,6 +1,6 @@
 """Telegram Bot API notifier.
 
-Reads ``CYBERM4FIA_TELEGRAM_BOT_TOKEN`` and ``CYBERM4FIA_TELEGRAM_CHAT_ID``
+Reads ``OSINT_TELEGRAM_BOT_TOKEN`` and ``OSINT_TELEGRAM_CHAT_ID``
 from the environment. If either is missing, :func:`from_env` returns
 ``None`` so the scheduler silently skips Telegram delivery.
 """
@@ -29,8 +29,8 @@ class TelegramNotifier:
 
     @classmethod
     def from_env(cls) -> "TelegramNotifier | None":
-        token = os.environ.get("CYBERM4FIA_TELEGRAM_BOT_TOKEN", "").strip()
-        chat = os.environ.get("CYBERM4FIA_TELEGRAM_CHAT_ID", "").strip()
+        token = os.environ.get("OSINT_TELEGRAM_BOT_TOKEN", "").strip()
+        chat = os.environ.get("OSINT_TELEGRAM_CHAT_ID", "").strip()
         if not token or not chat:
             return None
         return cls(token, chat)

@@ -66,7 +66,7 @@ def score_match(
     if http_status != 200 or not body:
         return FPScore(0.0, ())
 
-    baseline = 0.5 if check_type in ("content_absent", "content_present") else 0.3
+    baseline = 0.5 if check_type in ("content_absent", "content_present") else 0.15
     score = baseline
     signals: list[str] = []
     uname_lower = username.lower()
@@ -74,15 +74,15 @@ def score_match(
 
     title_match = _TITLE_RE.search(body)
     if title_match and uname_lower in title_match.group(1).lower():
-        score += 0.35
+        score += 0.25
         signals.append("title")
 
     if uname_lower in body_lower:
-        score += 0.20
+        score += 0.15
         signals.append("body")
 
     if len(body) >= MIN_BODY:
-        score += 0.15
+        score += 0.10
         signals.append("size")
 
     canonical_match = _CANONICAL_RE.search(body)

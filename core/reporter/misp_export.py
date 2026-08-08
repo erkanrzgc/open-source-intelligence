@@ -130,7 +130,7 @@ def build_misp_event(result: ScanResult) -> dict[str, Any]:
             "distribution": "0",      # your organization only
             "published": False,
             "Tag": [
-                {"name": f"osint:source=\"cyberm4fia\""},
+                {"name": "osint:source=\"open-source-intelligence\""},
                 {"name": f"osint:username=\"{result.username}\""},
             ],
             "Attribute": attrs,

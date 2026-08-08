@@ -12,7 +12,7 @@ from html import escape
 
 from core.investigator_summary import build_investigator_summary
 from core.models import ScanResult
-from core.reporter.console_ui import console
+from core.reporter.console import console
 from core.reporter.html_style import HTML_STYLE
 
 
@@ -537,11 +537,11 @@ def render_html(data: dict) -> str:
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">
-    <title>CyberM4fia OSINT - {escape(data['username'])}</title>
+    <title>Open Source Intelligence - {escape(data['username'])}</title>
     <style>{HTML_STYLE}</style>
 </head>
 <body>
-    <h1>CYBERM4FIA OSINT</h1>
+    <h1>OPEN SOURCE INTELLIGENCE</h1>
     <p class="meta">Report: {escape(data['username'])} | {escape(data['exported_at'])}</p>
 
     <div class="summary">

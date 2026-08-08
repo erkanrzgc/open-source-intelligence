@@ -1,5 +1,7 @@
 """Deep profile scrapers for platforms with accessible APIs."""
 
+import re
+
 from core.http_client import HTTPClient
 
 
@@ -37,8 +39,6 @@ async def scrape_reddit(client: HTTPClient, username: str) -> dict:
     d = data.get("data", {})
     return {
         "name": d.get("name", ""),
-        "link_karma": d.get("link_karma", 0),
-        "comment_karma": d.get("comment_karma", 0),
         "total_karma": d.get("total_karma", 0),
         "created_utc": d.get("created_utc", 0),
         "has_verified_email": d.get("has_verified_email", False),
@@ -175,7 +175,6 @@ async def scrape_steam(client: HTTPClient, username: str) -> dict:
         return {}
 
     def extract_xml(tag: str, text: str) -> str:
-        import re
         m = re.search(rf"<{tag}><!\[CDATA\[(.*?)\]\]></{tag}>", text, re.DOTALL)
         if m:
             return m.group(1).strip()

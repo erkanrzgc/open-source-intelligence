@@ -12,6 +12,7 @@ import re
 import time
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 from core.config import ScanConfig
 from core.cross_reference import cross_reference
@@ -125,7 +126,7 @@ def _should_render(platform: Platform, cfg: ScanConfig) -> bool:
         return False
     if platform.check_type == "json_api":
         return False
-    # Forced global opt-in (--playwright) OR platform flagged as js_heavy.
+    # Forced global opt-in (cfg.playwright) OR platform flagged as js_heavy.
     return bool(cfg.playwright or platform.js_heavy)
 
 
@@ -171,6 +172,45 @@ def _screenshot_dir_for(cfg: ScanConfig) -> Path | None:
     return Path(base) / cfg.username
 
 
+def _any_absence_match(body: str, strings: tuple[str, ...]) -> bool:
+    """Return True if any absence indicator is found in *body*."""
+    if not strings or not body:
+        return False
+    return any(s in body for s in strings)
+
+
+def _any_presence_match(body: str, strings: tuple[str, ...]) -> bool:
+    """Return True if any presence indicator is found in *body*."""
+    if not strings or not body:
+        return False
+    return any(s in body for s in strings)
+
+
+_PATTERN_CACHE: dict[str, re.Pattern[str] | None] = {}
+"""Compiled regex cache for platform username_pattern fields. None = tried and failed."""
+
+
+def _username_matches_platform(username: str, platform: Platform) -> bool:
+    """Check whether *username* conforms to *platform.username_pattern*.
+
+    Returns True when there is no pattern (don't filter) or the pattern matches.
+    """
+    pattern = platform.username_pattern
+    if not pattern:
+        return True
+    if pattern not in _PATTERN_CACHE:
+        try:
+            _PATTERN_CACHE[pattern] = re.compile(pattern)
+        except re.error:
+            _PATTERN_CACHE[pattern] = None
+            log.debug("invalid username_pattern for %s: %s", platform.name, pattern)
+            return True
+    compiled = _PATTERN_CACHE[pattern]
+    if compiled is None:
+        return True
+    return bool(compiled.fullmatch(username))
+
+
 async def _check_platform(
     client: HTTPClient, cfg: ScanConfig, platform: Platform
 ) -> PlatformResult:
@@ -178,6 +218,16 @@ async def _check_platform(
     url = platform.url.replace("{username}", username)
     result = PlatformResult(platform=platform.name, url=url, category=platform.category)
     login_required = False
+
+    if cfg.skip_invalid_usernames:
+        if not _username_matches_platform(username, platform):
+            result.status = "invalid_username"
+            result.fp_signals = ["username_pattern_mismatch"]
+            return result
+        if _is_known_not_found(username, platform.name):
+            result.status = "cached_not_found"
+            result.fp_signals = ["negative_cache_hit"]
+            return result
 
     try:
         if platform.check_type == "json_api":
@@ -190,6 +240,22 @@ async def _check_platform(
             body: str = ""
             elapsed = 0.0
             final_url: str | None = None
+
+            # Quick API probe (url_probe) — skip heavy fetch when the profile clearly doesn't exist.
+            if platform.url_probe:
+                probe_url = platform.url_probe.replace("{username}", username)
+                try:
+                    _probe_status, _probe_data, _probe_elapsed = await client.get_json(
+                        probe_url, platform.headers
+                    )
+                except Exception:
+                    _probe_status, _probe_data, _probe_elapsed = -1, None, 0.0
+                if _probe_status != 200:
+                    result.http_status = _probe_status
+                    result.response_time = _probe_elapsed
+                    result.exists = False
+                    result.status = "not_found"
+                    return result
 
             if _should_render(platform, cfg):
                 t0 = time.monotonic()
@@ -263,10 +329,20 @@ async def _check_platform(
             result.final_url = final_url if final_url and final_url != url else None
             if platform.check_type == "status":
                 result.exists = status == 200
+                # Honour maigret's absence_strings even for status-type platforms.
+                # Many sites return 200 with an empty profile page rather than a
+                # proper 404, so a message-based absent check is more reliable.
+                if result.exists and body and platform.absence_strings:
+                    if _any_absence_match(body, platform.absence_strings):
+                        result.exists = False
+                        result.status = "soft_404_message"
+                        result.fp_signals = list(result.fp_signals) + ["maigret_absence_match"]
             elif platform.check_type == "content_absent":
-                result.exists = status == 200 and platform.error_text not in body
+                absent = (platform.error_text and platform.error_text in body) or _any_absence_match(body, platform.absence_strings)
+                result.exists = status == 200 and not absent
             elif platform.check_type == "content_present":
-                result.exists = status == 200 and platform.success_text in body
+                present = (platform.success_text and platform.success_text in body) or _any_presence_match(body, platform.presence_strings)
+                result.exists = status == 200 and present
 
             # Soft-404 detection via redirect to a URL that doesn't carry the username.
             # Only applied when the platform didn't already give a definitive signal.
@@ -353,6 +429,39 @@ async def _check_platform(
                         )
                     )
 
+            # Playwright re-check for ambiguous aiohttp responses (short body = likely JS shell).
+            if (
+                not result.rendered
+                and result.exists
+                and _selected_browser_available(cfg)
+                and not cfg.no_auto_render
+                and (platform.absence_strings or platform.presence_strings)
+                and len(body) < 500
+            ):
+                t0 = time.monotonic()
+                rendered = await _fetch_rendered_with_backend(
+                    cfg, url,
+                    wait_for_selector=platform.wait_for_selector,
+                    timeout_ms=max(5000, cfg.request_timeout * 1000),
+                    proxy=cfg.proxy,
+                    screenshot_dir=_screenshot_dir_for(cfg),
+                    screenshot_name=platform.name,
+                )
+                elapsed += time.monotonic() - t0
+                if rendered is not None and rendered.html:
+                    result.rendered = True
+                    status = rendered.status
+                    body = rendered.html
+                    result.screenshot_path = rendered.screenshot_path
+                    final_url = getattr(rendered, "final_url", None) or final_url
+                    result.fp_signals = list(result.fp_signals) + ["playwright_recheck"]
+                    if platform.check_type == "content_absent":
+                        absent = (platform.error_text and platform.error_text in body) or _any_absence_match(body, platform.absence_strings)
+                        result.exists = status == 200 and not absent
+                    elif platform.check_type == "content_present":
+                        present = (platform.success_text and platform.success_text in body) or _any_presence_match(body, platform.presence_strings)
+                        result.exists = status == 200 and present
+
         if result.status == "pending":
             result.status = (
                 "login_required" if login_required else _status_from_http(status, result.exists)
@@ -363,6 +472,9 @@ async def _check_platform(
     except Exception as exc:
         log.warning("unexpected error checking %s: %s", platform.name, exc)
         result.status = "error"
+
+    if not result.exists and result.status not in ("error",):
+        _mark_not_found(username, platform.name)
 
     return result
 
@@ -412,7 +524,6 @@ def _looks_redirected_off(
     if username.lower() in final_lower:
         return False
     try:
-        from urllib.parse import urlparse
         parsed = urlparse(final_lower)
     except ValueError:
         return False
@@ -461,7 +572,7 @@ async def _phase_profile_validate(
     borderline = [
         p
         for p in result.platforms
-        if p.exists and 0.45 <= p.confidence <= 0.70
+        if p.exists and p.confidence >= 0.25
     ]
     if not borderline:
         return
@@ -497,8 +608,8 @@ async def _phase_profile_validate(
             },
         }
         try:
-            out = await asyncio.to_thread(
-                run_skill, "profile_validator", inputs, budget=budget
+            out = await run_skill(
+                "profile_validator", inputs, budget=budget
             )
         except SkillError as exc:
             log.debug("profile_validator failed for %s: %s", p.platform, exc)
@@ -616,6 +727,14 @@ async def _phase_handle_resolve(
         hits=best_hit_count,
     )
 
+    if cfg.username and cfg.username.strip().lower() != best_handle.lower():
+        console.print(
+            f"  [bold cyan][0/8][/bold cyan] Keeping original username "
+            f"[bold]{cfg.username}[/bold] for main sweep; "
+            f"[bold]{best_handle}[/bold] queued as variation."
+        )
+        return replace(cfg, full_name=None)
+
     return replace(cfg, username=best_handle)
 
 
@@ -629,6 +748,24 @@ def _status_from_http(status: int, exists: bool) -> str:
     if status == 429:
         return "blocked"
     return "found" if exists else "not_found"
+
+
+# Per-scan negative cache: username -> set of platform names that returned 404/not_found.
+# Cleared at the start of each scan; used by recursive/deep phases to avoid
+# re-checking platforms that already failed for a given username.
+_NEGATIVE_CACHE: dict[str, set[str]] = {}
+
+
+def _mark_not_found(username: str, platform_name: str) -> None:
+    _NEGATIVE_CACHE.setdefault(username, set()).add(platform_name)
+
+
+def _is_known_not_found(username: str, platform_name: str) -> bool:
+    return platform_name in _NEGATIVE_CACHE.get(username, set())
+
+
+def _clear_negative_cache() -> None:
+    _NEGATIVE_CACHE.clear()
 
 
 def _looks_login_required(status: int, body: str) -> bool:
@@ -668,7 +805,84 @@ def _extract_avatar_urls(platforms: list[PlatformResult]) -> list[tuple[str, str
 def _select_platforms(categories: tuple[str, ...] | None) -> list[Platform]:
     if not categories:
         return list(PLATFORMS)
+    if categories == ("__popular__",):
+        return _popular_platforms()
+    if categories == ("__verified__",):
+        return _verified_platforms()
     return [p for p in PLATFORMS if p.category in categories]
+
+
+def _verified_platforms() -> list[Platform]:
+    """Return platforms with maigret-verified detection signals (absence/presence strings
+    or API probe endpoints). These produce far fewer false positives than bare status-only
+    platforms."""
+    verified = set()
+    try:
+        import json
+        data = json.loads(
+            Path("/tmp/maigret_data.json").read_text(encoding="utf-8")
+        )["sites"]
+        for name, d in data.items():
+            if d.get("absenceStrs") or d.get("presenseStrs") or d.get("urlProbe"):
+                verified.add(name.lower().strip().rstrip("."))
+    except Exception:
+        pass
+    if not verified:
+        return _popular_platforms()  # fallback
+    from difflib import SequenceMatcher
+    result = []
+    for p in PLATFORMS:
+        pkey = p.name.lower().strip().rstrip(".")
+        if pkey in verified:
+            result.append(p)
+            continue
+        for vname in verified:
+            if SequenceMatcher(None, pkey, vname).ratio() > 0.85:
+                result.append(p)
+                break
+    log.debug("verified platforms: %d out of %d", len(result), len(PLATFORMS))
+    return result
+
+
+_POPULAR_PLATFORM_NAMES: set[str] | None = None
+_VERIFIED_PLATFORM_NAMES: set[str] | None = None
+_MAIGRET_PATH = Path(__file__).resolve().parent.parent / "scripts" / "maigret_data.json"
+
+
+def _popular_platforms() -> list[Platform]:
+    global _POPULAR_PLATFORM_NAMES
+    if _POPULAR_PLATFORM_NAMES is None:
+        try:
+            import json
+            data = json.loads(
+                _MAIGRET_PATH.read_text(encoding="utf-8")
+            )["sites"]
+            scored = sorted(
+                (d.get("alexaRank", 99999), name)
+                for name, d in data.items()
+                if d.get("alexaRank") and d["alexaRank"] < 100000
+            )
+            _POPULAR_PLATFORM_NAMES = {
+                name.lower().strip().rstrip(".") for _, name in scored[:300]
+            }
+        except Exception:
+            _POPULAR_PLATFORM_NAMES = set()
+    popular = _POPULAR_PLATFORM_NAMES
+    if not popular:
+        return list(PLATFORMS)
+    from difflib import SequenceMatcher
+    result = []
+    for p in PLATFORMS:
+        pkey = p.name.lower().strip().rstrip(".")
+        if pkey in popular:
+            result.append(p)
+            continue
+        for mname in popular:
+            ratio = SequenceMatcher(None, pkey, mname).ratio()
+            if ratio > 0.85:
+                result.append(p)
+                break
+    return result
 
 
 # ── Phase implementations ────────────────────────────────────────────────
@@ -853,12 +1067,12 @@ async def _phase_email_breach(
         for e in [r.profile_data.get("email")]
         if e and isinstance(e, str) and "@" in e
     ]
-    # Caller-supplied email (via --email-only) is the most authoritative source.
+    # A caller-supplied email_only value is the most authoritative source.
     if cfg.email_only and cfg.email_only not in known_emails:
         known_emails.insert(0, cfg.email_only)
 
     email_results = await discover_emails(client, cfg.username, known_emails)
-    # Make sure the explicit --email-only target is always represented in
+    # Make sure the explicit email_only target is always represented in
     # results even when discover_emails couldn't verify it via Gravatar.
     if cfg.email_only and not any(er.email == cfg.email_only for er in email_results):
         email_results.insert(
@@ -901,7 +1115,7 @@ async def _phase_email_breach(
         f"  [bold green][5/8][/bold green] Done: {len(email_results)} emails found"
     )
 
-    # COMB leak lookup: piggyback on the breach phase. Runs when --breach is on.
+    # COMB leak lookup: piggyback on the breach phase.
     if cfg.breach:
         queries = list({cfg.username} | {er.email for er in email_results})
         console.print(
@@ -1401,7 +1615,7 @@ async def _phase_doc_metadata(
     """Extract embedded metadata from a list of public document URLs.
 
     Pairs naturally with passive/google_dork's "files" preset — feed
-    the dork hits straight into ``--harvest-doc`` to surface authors,
+    the dork hits straight into ``cfg.harvest_doc_urls`` to surface authors,
     last-modifiers, and internal SMB share paths.
     """
     if not cfg.harvest_doc_urls:
@@ -1416,7 +1630,7 @@ async def _phase_geocode(cfg: ScanConfig, result: ScanResult) -> None:
     """Resolve location strings found in profile data to lat/lng.
 
     Network-bound and politely rate-limited; only runs when the user opts
-    in with ``--geocode`` because Nominatim enforces a 1 req/s policy.
+    in when ``cfg.geocode`` is enabled because Nominatim enforces a 1 req/s policy.
     """
     if not cfg.geocode:
         return
@@ -1446,6 +1660,7 @@ def _phase_enrichment(cfg: ScanConfig, result: ScanResult) -> None:
 async def run_scan(cfg: ScanConfig) -> ScanResult:
     """Run an OSINT scan based on the provided immutable configuration."""
     start_time = time.monotonic()
+    _clear_negative_cache()
     result = ScanResult(username=cfg.username)
     platforms = _select_platforms(cfg.categories)
 
@@ -1463,13 +1678,13 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
                 "  [yellow]Warning:[/yellow] [bold]HIBP_API_KEY[/bold] not set; breach check will be skipped."
             )
 
-        # Phase 0 (optional): resolve --name to a real username via quick
+        # Phase 0 (optional): resolve cfg.full_name to a username via quick
         # candidate probes. Mutates cfg.username for the rest of the scan.
         if cfg.full_name:
             cfg = await _phase_handle_resolve(client, cfg, platforms, result)
             result.username = cfg.username
 
-        # --email-only short-circuits the platform sweep: caller already
+        # cfg.email_only short-circuits the platform sweep: caller already
         # has an identifier, so we jump straight to the breach/holehe/ghunt
         # chain. Force the relevant flags on so downstream phases run.
         if cfg.email_only:
@@ -1493,7 +1708,7 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
         await _phase_deep_scrape(client, cfg, platform_results)
         _emit("phase_end", phase="deep_scrape")
 
-        # AI-augmented validation of borderline matches (opt-in via --ai-skills).
+        # AI-augmented validation of borderline matches (cfg.ai_skills).
         _emit("phase_start", phase="profile_validate")
         await _phase_profile_validate(cfg, result)
         _emit("phase_end", phase="profile_validate")

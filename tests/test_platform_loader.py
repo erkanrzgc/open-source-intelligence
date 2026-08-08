@@ -85,7 +85,7 @@ platforms:
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("CYBERM4FIA_PLATFORMS_FILE", str(user_file))
+    monkeypatch.setenv("OSINT_PLATFORMS_FILE", str(user_file))
     monkeypatch.setattr(platform_loader, "USER_YAML", tmp_path / "absent.yaml")
 
     platforms = load_platforms()
@@ -107,7 +107,7 @@ platforms:
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("CYBERM4FIA_PLATFORMS_FILE", str(user_file))
+    monkeypatch.setenv("OSINT_PLATFORMS_FILE", str(user_file))
     monkeypatch.setattr(platform_loader, "USER_YAML", tmp_path / "absent.yaml")
 
     platforms = load_platforms()
@@ -117,7 +117,7 @@ platforms:
 def test_malformed_yaml_ignored(tmp_path: Path, monkeypatch):
     user_file = tmp_path / "bad.yaml"
     user_file.write_text(": : not yaml :\n", encoding="utf-8")
-    monkeypatch.setenv("CYBERM4FIA_PLATFORMS_FILE", str(user_file))
+    monkeypatch.setenv("OSINT_PLATFORMS_FILE", str(user_file))
     monkeypatch.setattr(platform_loader, "USER_YAML", tmp_path / "absent.yaml")
 
     # Loader must survive and still return builtins
@@ -128,7 +128,7 @@ def test_malformed_yaml_ignored(tmp_path: Path, monkeypatch):
 def test_non_mapping_top_level_ignored(tmp_path: Path, monkeypatch):
     user_file = tmp_path / "list.yaml"
     user_file.write_text("- just a list\n", encoding="utf-8")
-    monkeypatch.setenv("CYBERM4FIA_PLATFORMS_FILE", str(user_file))
+    monkeypatch.setenv("OSINT_PLATFORMS_FILE", str(user_file))
     monkeypatch.setattr(platform_loader, "USER_YAML", tmp_path / "absent.yaml")
 
     platforms = load_platforms()
@@ -148,7 +148,7 @@ platforms:
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("CYBERM4FIA_PLATFORMS_FILE", str(user_file))
+    monkeypatch.setenv("OSINT_PLATFORMS_FILE", str(user_file))
     monkeypatch.setattr(platform_loader, "USER_YAML", tmp_path / "absent.yaml")
 
     platforms = load_platforms()

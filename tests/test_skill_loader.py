@@ -24,7 +24,7 @@ class _StubBackend:
         self.response = response
         self.calls: list[tuple[str, str]] = []
 
-    def complete(self, system, user, *, max_tokens, temperature):
+    async def complete(self, system, user, *, max_tokens, temperature):
         self.calls.append((system, user))
         return self.response
 
@@ -36,14 +36,14 @@ description: short description
 max_tokens: 600
 temperature: 0.3
 triggers:
-  - --name CLI flag
+  - cfg.full_name
   - second trigger
 """
     parsed = _parse_yaml_lite(text)
     assert parsed["name"] == "handle_generator"
     assert parsed["max_tokens"] == 600
     assert parsed["temperature"] == 0.3
-    assert parsed["triggers"] == ["--name CLI flag", "second trigger"]
+    assert parsed["triggers"] == ["cfg.full_name", "second trigger"]
 
 
 def test_parse_yaml_lite_inline_json_schema():
@@ -114,7 +114,7 @@ def test_skill_budget_consumes_until_exhausted():
     assert b.remaining == 0
 
 
-def test_run_skill_with_stub_backend(tmp_path: Path, monkeypatch):
+async def test_run_skill_with_stub_backend(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "core.analysis.skill_loader.CACHE_DIR", tmp_path
     )
@@ -122,7 +122,7 @@ def test_run_skill_with_stub_backend(tmp_path: Path, monkeypatch):
     backend = _StubBackend(
         '{"candidates":[{"handle":"alice","score":0.9,"rationale":"first-only"}]}'
     )
-    out = run_skill(
+    out = await run_skill(
         "handle_generator",
         {"full_name": "Alice"},
         backend=backend,
@@ -133,7 +133,7 @@ def test_run_skill_with_stub_backend(tmp_path: Path, monkeypatch):
     assert len(backend.calls) == 1
 
 
-def test_run_skill_cache_hits_skip_backend(tmp_path: Path, monkeypatch):
+async def test_run_skill_cache_hits_skip_backend(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "core.analysis.skill_loader.CACHE_DIR", tmp_path
     )
@@ -142,21 +142,21 @@ def test_run_skill_cache_hits_skip_backend(tmp_path: Path, monkeypatch):
         '{"candidates":[{"handle":"bob","score":0.8,"rationale":"first-only"}]}'
     )
     inputs = {"full_name": "Bob"}
-    out1 = run_skill("handle_generator", inputs, backend=backend, use_cache=True)
-    out2 = run_skill("handle_generator", inputs, backend=backend, use_cache=True)
+    out1 = await run_skill("handle_generator", inputs, backend=backend, use_cache=True)
+    out2 = await run_skill("handle_generator", inputs, backend=backend, use_cache=True)
     assert out1 == out2
     # Backend called only once even though run_skill was invoked twice.
     assert len(backend.calls) == 1
 
 
-def test_run_skill_budget_exhaustion_raises(tmp_path: Path, monkeypatch):
+async def test_run_skill_budget_exhaustion_raises(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "core.analysis.skill_loader.CACHE_DIR", tmp_path
     )
     clear_cache(memory_only=True)
     backend = _StubBackend('{"candidates":[]}')
     budget = SkillBudget(limit=1)
-    run_skill(
+    await run_skill(
         "handle_generator",
         {"full_name": "Alice"},
         backend=backend,
@@ -164,7 +164,7 @@ def test_run_skill_budget_exhaustion_raises(tmp_path: Path, monkeypatch):
         use_cache=False,
     )
     with pytest.raises(SkillError, match="budget exhausted"):
-        run_skill(
+        await run_skill(
             "handle_generator",
             {"full_name": "Charlie"},
             backend=backend,
@@ -173,14 +173,14 @@ def test_run_skill_budget_exhaustion_raises(tmp_path: Path, monkeypatch):
         )
 
 
-def test_run_skill_schema_violation_raises(tmp_path: Path, monkeypatch):
+async def test_run_skill_schema_violation_raises(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "core.analysis.skill_loader.CACHE_DIR", tmp_path
     )
     clear_cache(memory_only=True)
     backend = _StubBackend('{"unrelated_key": 1}')
     with pytest.raises(SkillError, match="missing keys"):
-        run_skill(
+        await run_skill(
             "handle_generator",
             {"full_name": "Alice"},
             backend=backend,

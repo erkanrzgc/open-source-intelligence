@@ -14,10 +14,9 @@ outputs:
   crtsh_hits: list[dict]
   filetype_hits: list[dict]
 triggers:
-  - --redteam-domain CLI flag
-  - --gitleaks-path CLI flag
-  - --harvest-doc CLI flag
-  - cfg.redteam_domain in ScanConfig
+  - cfg.redteam_domain
+  - cfg.gitleaks_paths
+  - cfg.harvest_doc_urls
 dependencies:
   - core.http_client
   - modules.dns_lookup (subdomain enrichment)
@@ -28,7 +27,7 @@ ai_required: false
 ## When to use
 
 Activates for corporate / domain-scoped scans. Pure-username scans skip
-this entire sub-tree. Email pattern generation requires `--redteam-names-file`;
+this entire sub-tree. Email pattern generation requires `cfg.redteam_names_file`;
 GitHub org enumeration only needs the org name.
 
 ## Input contract

@@ -1,319 +1,222 @@
-<h1 align="center">cyberm4fia-osint</h1>
+<h1 align="center">Open Source Intelligence</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/mission-open%20source%20intelligence-blueviolet?style=for-the-badge" alt="mission">
-</p>
-
-<table align="center"><tr><td valign="middle">
-<pre>
- ██████╗██╗   ██╗██████╗ ███████╗██████╗ ███╗   ███╗██╗  ██╗███████╗██╗ █████╗
-██╔════╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗████╗ ████║██║  ██║██╔════╝██║██╔══██╗
-██║      ╚████╔╝ ██████╔╝█████╗  ██████╔╝██╔████╔██║███████║█████╗  ██║███████║
-██║       ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗██║╚██╔╝██║╚════██║██╔══╝  ██║██╔══██║
-╚██████╗   ██║   ██████╔╝███████╗██║  ██║██║ ╚═╝ ██║     ██║██║     ██║██║  ██║
- ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝     ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝
-</pre>
-</td><td valign="middle">
-<img src="https://raw.githubusercontent.com/erkanrzgc/cyberm4fia-osint/main/resources/osint_icon.png" width="150">
-</td></tr></table>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python" alt="python">
-  <img src="https://img.shields.io/badge/platforms-1900+-purple?style=flat-square" alt="platforms">
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license">
-  <img src="https://img.shields.io/badge/AI-local%20LLM-orange?style=flat-square" alt="AI">
-  <img src="https://img.shields.io/github/last-commit/erkanrzgc/cyberm4fia-osint?style=flat-square" alt="last commit">
+  <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python" alt="Python">
+  <img src="https://img.shields.io/badge/platforms-1900+-purple?style=flat-square" alt="Platforms">
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/tests-809%20passed-success?style=flat-square" alt="Tests">
 </p>
 
 <p align="center">
-  <b>cyberm4fia-osint</b> is a terminal-first OSINT username reconnaissance framework that hunts a single username across <b>1,900+ platforms</b> — then enriches findings with deep profile scraping, breach checks, cross-referencing, and optional <b>local LLM analysis</b>.
+  <strong>Username reconnaissance across 1900+ platforms — zero false positives.</strong><br>
+  AI-powered verification • email breach discovery • smart username variations
 </p>
 
 ---
 
-## Features
+## Quickstart
 
-- **1,900+ platforms** checked in parallel
-- **Zero-flag full scan** by default — everything on unless you opt out with `--quick`
-- **Deep profile scraping** for GitHub, GitLab, Reddit, Steam, Chess.com, Lichess, Keybase, Hacker News, Dev.to, and more
-- **Opportunistic profile parsing** — pulls names, emails, locations, and linked accounts out of any HTML we fetched (200+ site schemes, optional install)
-- **Cross-reference engine** with confidence scoring across names, locations, and profile photos
-- **Smart search** — generates username variations and discovers linked accounts from scraped bios
-- **Email discovery** + Gravatar detection + free breach lookup + public credential-leak search
-- **Email → site enumeration** — pivot any discovered email through 120+ site registration probes (`--holehe`)
-- **Google account lookup** — resolve emails to Google accounts (Gaia ID, name, services) (`--ghunt`)
-- **Instagram profile OSINT** — optional `IG_SESSION_ID` for richer data (`--toutatis`)
-- **Recursive pivot discovery** — usernames found inside profile data are fed back into the platform sweep (`--recursive`)
-- **Profile photo matching** via perceptual hashing
-- **WHOIS / DNS / subdomain enumeration** (crt.sh)
-- **Wayback Machine** and paste-site presence
-- **Scan history** with SQLite + diff mode (`--diff` shows what changed between runs)
-- **LLM-driven analysis** — defaults to NVIDIA NIM (free tier), works with any OpenAI-compatible endpoint (OpenAI, Groq, Ollama, llama.cpp server, vLLM); generates an AI-written identity / exposure report
-- **HTML + JSON + DOT graph** exports
-- **Tor / SOCKS / HTTP proxy** support
-- **MCP server** for Claude Desktop and other MCP-compatible clients
-- **CI-ready** — 500+ tests with ruff, mypy, bandit, and coverage checks
+```bash
+pip install git+https://github.com/erkanrzgc/open-source-intelligence.git
+osint
+```
+
+```
+╭──────────────────────────────────────────────╮
+│ Open Source Intelligence — username scanner  │
+│ ~500 verified platforms · AI validation       │
+╰──────────────────────────────────────────────╯
+
+Username: johndoe
+
+[1] Quick  — verified platforms (~500, AI validation)
+[2] Full   — all 1924 platforms
+[3] Custom — pick categories yourself
+
+Choose: 1
+
+→ Scanning 500 platforms...
+→ AI validating matches...
+→ Verifying 15 matches...
+  Real: 7  Fake: 8
+
+Results
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ Confirmed platforms ┃ 7     ┃
+┃ Time                ┃ 45.2s ┃
+┗━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━┛
+```
+
+Or one-liner:
+
+```bash
+osint scan johndoe --verified
+```
+
+---
+
+## What it does
+
+| Phase | Description |
+|-------|-------------|
+| Platform sweep | Checks 1900+ sites in parallel for the username |
+| AI validation | LLM evaluates borderline matches, reduces false positives |
+| Deep scrape | Extracts names, bios, locations from known platforms |
+| Smart search | Generates username variations (john → j0hn, johndoe42) |
+| Email discovery | Gravatar → HIBP → COMB leak lookup → Holehe → GHunt |
+| Photo compare | Perceptual-hash avatar comparison across platforms |
+| Post-verify | Re-checks every found URL — drops redirects, 404s, search pages |
+
+---
+
+## CLI reference
+
+```bash
+osint                          # interactive mode (recommended)
+osint scan <username>          # one-liner
+osint scan <username> --verified  # verified platforms only (~500)
+osint scan <username> --smart     # username variations
+osint scan <username> --full-name "John Doe"  # name → handle resolution
+```
+
+Results saved to `log/<username>/<timestamp>.json`.
 
 ---
 
 ## Installation
 
-Requires Python **3.10+**.
+Python 3.10+ required.
 
 ```bash
-git clone https://github.com/erkanrzgc/cyberm4fia-osint.git
-cd cyberm4fia-osint
-python3 -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/erkanrzgc/open-source-intelligence.git
+cd open-source-intelligence
 pip install -e .
 ```
-
-After the editable install, the `cyberm4fia` command is available on your `$PATH`.
 
 Optional extras:
 
 ```bash
-pip install -e '.[ai]'        # local LLM via llama-cpp-python
-pip install -e '.[photo]'     # profile photo hashing (Pillow, imagehash)
-pip install -e '.[extract]'   # socid-extractor — auto-parse 200+ profile pages
-pip install -e '.[holehe]'    # 120+ site email registration probes
-pip install -e '.[ghunt]'     # Google account lookup (run `ghunt login` once after install)
-pip install -e '.[toutatis]'  # Instagram profile OSINT
-pip install -e '.[socks]'     # SOCKS / Tor support (aiohttp-socks)
-pip install -e '.[api]'       # FastAPI REST server + web UI
-pip install -e '.[report]'    # PDF/XLSX report exporters
-pip install -e '.[browser]'   # Playwright browser fallback
-pip install -e '.[filetype]'  # Magika file-type detection for harvested docs
-pip install -e '.[dev]'       # pytest, ruff, mypy, coverage
+pip install -e '.[browser]'   # Playwright rendering for JS-heavy sites
+pip install -e '.[photo]'     # avatar photo hashing
+pip install -e '.[holehe]'    # email registration probes (120+ sites)
+pip install -e '.[ghunt]'     # Google account lookup
+pip install -e '.[toutatis]'  # Instagram enrichment
+pip install -e '.[report]'    # PDF, XLSX exports
+pip install -e '.[ai]'        # local LLM via llama-cpp
+pip install -e '.[api]'       # FastAPI + uvicorn web server
+pip install -e '.[dev]'       # pytest, ruff, mypy
 ```
 
-Obscura can be used as an alternative browser renderer by installing the
-`obscura` binary and running:
+For AI-powered verification, set your NVIDIA NIM / OpenAI-compatible endpoint:
 
 ```bash
-cyberm4fia johndoe --browser-backend obscura
+export OSINT_LLM_API_KEY="nvapi-..."
+export OSINT_LLM_URL="https://integrate.api.nvidia.com/v1/chat/completions"
 ```
 
-Set `CYBERM4FIA_OBSCURA_BIN=/path/to/obscura` if the binary is not on `$PATH`.
+Without an API key, AI features gracefully fall back to strict body-based checks.
 
 ---
 
-## Quick Start
+## Python library
 
-Full scan (everything on):
+```python
+import asyncio
+from core.config import ScanConfig
+from core.engine import run_scan
 
-```bash
-cyberm4fia johndoe
-```
+async def main():
+    cfg = ScanConfig(
+        username="johndoe",
+        deep=True,
+        smart=True,
+        email=True,
+        breach=True,
+        ai_skills=True,
+    )
+    result = await run_scan(cfg)
+    for p in result.found_platforms:
+        print(f"{p.platform}: {p.url}")
 
-Fast sweep — platform check only:
-
-```bash
-cyberm4fia johndoe --quick
-```
-
-Only a specific category:
-
-```bash
-cyberm4fia johndoe --category social,dev
-```
-
-Export an HTML report:
-
-```bash
-cyberm4fia johndoe --output reports/johndoe.html
-```
-
-Run it behind Tor:
-
-```bash
-cyberm4fia johndoe --tor
-```
-
-Diff against the previous run for the same username:
-
-```bash
-cyberm4fia johndoe --diff
+asyncio.run(main())
 ```
 
 ---
 
-## AI Analysis
-
-`cyberm4fia` ships with an optional LLM analyst. It takes the structured scan result and generates a concise cybersecurity report: identity summary, strong linkages, exposures, and next steps — all as JSON, parsed and displayed inline. The same backend powers the SE-arsenal pretext drafter.
-
-### Option A — NVIDIA NIM (default, free tier)
-
-1. Get a free key at [build.nvidia.com](https://build.nvidia.com) (~1000 req/month across all hosted models).
-2. Set the key:
+## Web API
 
 ```bash
-export CYBERM4FIA_LLM_API_KEY="nvapi-..."
-cyberm4fia johndoe --ai
+python -m uvicorn core.api.server:build_app --factory --host 127.0.0.1 --port 8000
 ```
 
-The defaults (`CYBERM4FIA_LLM_URL`, `CYBERM4FIA_LLM_MODEL`) already point at NVIDIA NIM with `meta/llama-3.3-70b-instruct`. Override `CYBERM4FIA_LLM_MODEL` for any other NIM-hosted model — see `.env.example` for curated red-team picks.
-
-### Option B — Any other OpenAI-compatible endpoint
-
-The HTTP backend speaks plain OpenAI Chat Completions, so OpenAI, Groq, Ollama, llama.cpp server, and vLLM all work by overriding three env vars:
+```
+http://127.0.0.1:8000       — web UI
+http://127.0.0.1:8000/docs  — OpenAPI docs
+```
 
 ```bash
-export CYBERM4FIA_LLM_URL="https://api.openai.com/v1/chat/completions"
-export CYBERM4FIA_LLM_API_KEY="sk-..."
-export CYBERM4FIA_LLM_MODEL="gpt-4o-mini"
-cyberm4fia johndoe --ai
+curl -H 'Content-Type: application/json' \
+  -d '{"username":"johndoe","deep":true,"smart":true}' \
+  http://127.0.0.1:8000/scan
 ```
 
-### Option C — Embedded `llama-cpp-python` (offline GGUF)
+---
+
+## MCP server
 
 ```bash
-pip install -e '.[ai]'
-export CYBERM4FIA_LLM_BACKEND=llama_cpp
-python -m core.analysis.download   # fetches the default GGUF
-cyberm4fia johndoe --ai
+python mcp_server.py
 ```
 
-### Environment variables
+```json
+{
+  "mcpServers": {
+    "open-source-intelligence": {
+      "command": "python",
+      "args": ["mcp_server.py"]
+    }
+  }
+}
+```
+
+---
+
+## Configuration
 
 | Variable | Default | Purpose |
-| --- | --- | --- |
-| `CYBERM4FIA_LLM_BACKEND` | `http` | `http` or `llama_cpp` |
-| `CYBERM4FIA_LLM_URL` | NVIDIA NIM chat completions | OpenAI-compatible endpoint |
-| `CYBERM4FIA_LLM_MODEL` | `meta/llama-3.3-70b-instruct` | Model ID sent in the request |
-| `CYBERM4FIA_LLM_API_KEY` | _(empty)_ | Bearer token — required for hosted backends |
-| `CYBERM4FIA_LLM_TIMEOUT` | `120` | HTTP timeout (seconds) |
-| `CYBERM4FIA_LLM_REPO` | _(your HF repo)_ | HF repo for `llama_cpp` backend |
-| `CYBERM4FIA_LLM_FILE` | _(your GGUF file)_ | GGUF filename |
-| `CYBERM4FIA_LLM_CTX` | `4096` | Context window |
-| `CYBERM4FIA_LLM_MAX_TOKENS` | `768` | Max output tokens |
-| `CYBERM4FIA_LLM_TEMPERATURE` | `0.2` | Sampling temperature |
-| `CYBERM4FIA_LLM_GPU_LAYERS` | `-1` | llama.cpp GPU offload layers |
+|----------|---------|---------|
+| `OSINT_MAX_CONCURRENT` | 50 | Global request concurrency |
+| `OSINT_TIMEOUT` | 15 | Request timeout (seconds) |
+| `OSINT_RETRIES` | 2 | Retry count |
+| `OSINT_LLM_BACKEND` | http | `http` or `llama_cpp` |
+| `OSINT_LLM_API_KEY` | — | NVIDIA / OpenAI API key |
+| `OSINT_LLM_MODEL` | nemotron-70b | Model identifier |
+| `OSINT_AUTH_REQUIRED` | off | Enable API auth |
+| `OSINT_PLATFORMS_FILE` | built-in | Custom platform YAML |
 
----
-
-## CLI Reference
-
-| Flag | Alias | Description |
-| --- | --- | --- |
-| `username` | — | Target username (positional) |
-| `--quick` | `-q` | Quick mode — platform sweep only |
-| `--full` | `-f` | Full scan (kept for backward compatibility; already the default) |
-| `--smart` | `-s` | Username variations + discovered linked accounts |
-| `--deep` / `--no-deep` | `-d` | Deep profile scraping (default: on) |
-| `--email` | `-e` | Email discovery + Gravatar |
-| `--breach` | — | Free breach lookup + public credential-leak search (auto-enables `--email`) |
-| `--holehe` | — | Probe ~120 sites for each discovered email (requires `[holehe]` extra) |
-| `--ghunt` | — | Google account lookup for each email (requires `[ghunt]` extra + `ghunt login`) |
-| `--toutatis` | — | Instagram OSINT for the username (requires `[toutatis]` extra; set `IG_SESSION_ID` for richer data) |
-| `--recursive` | — | Feed discovered usernames back into the platform sweep |
-| `--recursive-depth N` | — | Recursive pivot depth (default `1`) |
-| `--photo` | — | Profile photo perceptual-hash comparison |
-| `--web` | `-w` | Wayback / paste / domain presence |
-| `--whois` | — | WHOIS across 9 TLDs |
-| `--dns` | — | DNS record lookup |
-| `--subdomain` | — | crt.sh subdomain enumeration |
-| `--category` | `-c` | Restrict to categories (`social,dev,gaming,...`) |
-| `--tor` | `-toor` | Route through `socks5://127.0.0.1:9050` |
-| `--proxy` | — | Custom HTTP/SOCKS proxy |
-| `--browser-backend` | — | Browser renderer for JS-heavy pages: `playwright` or `obscura` |
-| `--output` | `-o` | Save report to `.json`, `.html`, or `.dot` |
-| `--timeout` | `-t` | Per-request timeout (seconds) |
-| `--history` | — | List prior scans for the username and exit |
-| `--diff` | — | Diff against the previous scan after running |
-| `--no-history` | — | Do not persist this scan |
-| `--ai` | — | Run local-LLM analysis on the result |
-| `--log-level` | — | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-
----
-
-## Platform Coverage
-
-**1,900+ platforms** across seven categories. Highlights:
-
-- **Social:** Instagram, X / Twitter, TikTok, Facebook, Snapchat, Threads, Bluesky, Mastodon, Reddit, Tumblr, VK, Telegram, Weibo, MySpace, Gab, Truth Social, Flipboard, Matrix, Clubhouse, Quora, Pinterest, Ask.fm, Badoo
-- **Dating:** Tinder, Badoo, MeetMe, Mamba, Hily, Tagged
-- **Dev:** GitHub, GitLab, Bitbucket, Dev.to, Stack Overflow, HackerOne, TryHackMe, HackTheBox, Kaggle, Hugging Face, Codeforces, LeetCode, Replit, CodePen, npm, PyPI, crates.io, Docker Hub
-- **Gaming:** Steam, Twitch, Chess.com, Lichess, Roblox, Xbox, NameMC, osu!, Speedrun.com, Fortnite Tracker
-- **Content:** YouTube, Medium, Substack, WordPress, Hashnode, SoundCloud, Spotify, Bandcamp, Vimeo, Dailymotion, Rumble, Kick
-- **Professional:** LinkedIn, Keybase, Behance, Dribbble, About.me, Gravatar, Wellfound, Crunchbase, Xing, ResearchGate, Academia.edu, Fiverr, Patreon
-- **Community & other:** Hacker News, Product Hunt, Ko-fi, BuyMeACoffee, Venmo, Cash App, PayPal.me, Strava, Untappd, Letterboxd, MyAnimeList, Goodreads, Tripadvisor, Couchsurfing, Meetup, Wattpad, Itch.io
-
-Want to add a platform? Edit `modules/platforms.yaml` — no code changes needed.
-
----
-
-## Output Formats
-
-- **Console** — rich, color-coded panels and tables (default)
-- **JSON** — `cyberm4fia user --output out.json`
-- **HTML** — `cyberm4fia user --output out.html` (self-contained, CSP-hardened)
-- **Graphviz DOT** — `cyberm4fia user --output out.dot`
-
----
-
-## Scan History
-
-Every run is persisted to a local SQLite database (`history.db`). Disable with `--no-history`.
-
-```bash
-cyberm4fia johndoe --history   # list prior scans
-cyberm4fia johndoe --diff      # diff against the last run
-```
-
----
-
-## Docker
-
-```bash
-docker build -t cyberm4fia-osint .
-docker run --rm cyberm4fia-osint johndoe --quick
-```
-
-The compose API service binds to `127.0.0.1:8000` by default. If you expose it
-outside localhost, enable the auth gate first:
-
-```bash
-docker compose run --rm cli --create-user analyst:change-me
-OSINT_AUTH_REQUIRED=1 OSINT_AUTH_SECRET="$(openssl rand -hex 32)" docker compose up api
-```
-
-API auth roles are enforced when `OSINT_AUTH_REQUIRED=1`: `viewer` is
-read-only, `analyst` can create/update, and `admin` is required for deletes.
-Background scan jobs are bounded by `CYBERM4FIA_SCAN_JOB_MAX_JOBS`,
-`CYBERM4FIA_SCAN_JOB_CONCURRENCY`, and `CYBERM4FIA_SCAN_JOB_MAX_EVENTS`.
-TLS verification is on by default; only set `CYBERM4FIA_INSECURE_TLS=1` for
-controlled lab targets with broken certificates.
+See `.env.example` for all options.
 
 ---
 
 ## Development
 
 ```bash
-pip install -e '.[dev,api,report,socks,whois,photo,dns]'
-pytest
-pytest --cov=core --cov=modules     # coverage report
-ruff check main.py core modules utils tests
-mypy --ignore-missing-imports core modules utils
+pip install -e '.[dev,api]'
+pytest                                  # 809 tests
+ruff check core modules tests           # lint
+mypy core modules                       # type check
 ```
 
-GitHub Actions runs the full matrix on every push.
+Unit tests use no live network.
 
 ---
 
-## Legal & Ethical Use
+## Disclaimer
 
-This tool queries **public** profile endpoints — the same information anyone can view in a browser. Use it for:
-
-- Security research and defensive OSINT
-- CTF challenges and red-team exercises with written authorization
-- Your own digital-footprint audit
-- Journalism and investigative research within applicable law
-
-**Do not** use it for harassment, stalking, doxing, or any activity that violates local law or the target platform's terms of service. The authors accept no responsibility for misuse.
+This tool is for authorized security research, journalism, and defensive purposes only. Do not use it for harassment, stalking, doxing, or violating platform terms of service. You are responsible for complying with all applicable laws and platform policies.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) © erkanrzgc

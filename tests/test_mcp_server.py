@@ -12,7 +12,7 @@ async def test_initialize():
     resp = await _dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
     assert resp is not None
     assert resp["result"]["protocolVersion"] == PROTOCOL_VERSION
-    assert "serverInfo" in resp["result"]
+    assert resp["result"]["serverInfo"]["name"] == "open-source-intelligence"
 
 
 @pytest.mark.asyncio
@@ -68,7 +68,7 @@ async def test_tools_call_invalid_username(monkeypatch):
         }
     )
     assert resp is not None
-    assert resp["result"]["isError"] is True
+    assert resp["error"]["code"] == -32602
 
 
 @pytest.mark.asyncio
@@ -133,7 +133,7 @@ async def test_redteam_recon_requires_domain():
         }
     )
     assert resp is not None
-    assert resp["result"]["isError"] is True
+    assert resp["error"]["code"] == -32602
 
 
 @pytest.mark.asyncio

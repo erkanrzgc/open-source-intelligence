@@ -5,7 +5,7 @@ an API key per admin user. We only need the ``/api/groups/`` endpoint to
 drop a phishing-target group; campaign/template management stays in the
 GoPhish UI where the operator already has workflows.
 
-Kept synchronous on purpose: this is a one-shot push from the CLI, not a
+Kept synchronous on purpose: this is a one-shot push operation, not a
 fan-out. No async machinery, no extra deps.
 """
 

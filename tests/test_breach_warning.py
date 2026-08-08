@@ -1,11 +1,10 @@
-"""Deterministic tests for --breach warnings and auto-enable behavior."""
+"""Deterministic tests for breach warning behavior."""
 
 import asyncio
 
-import main
 from core import engine
 from core.config import ScanConfig
-from core.models import CrossReferenceResult, ScanResult
+from core.models import CrossReferenceResult
 
 
 class PrintSpy:
@@ -14,29 +13,6 @@ class PrintSpy:
 
     def print(self, message="", *args, **kwargs):
         self.calls.append(str(message))
-
-
-def test_breach_alone_auto_enables_email_and_prints_warning(monkeypatch):
-    seen = {}
-    spy = PrintSpy()
-
-    async def fake_run_scan(cfg: ScanConfig):
-        seen["cfg"] = cfg
-        return ScanResult(username=cfg.username)
-
-    monkeypatch.setattr(main, "run_scan", fake_run_scan)
-    monkeypatch.setattr(main, "print_banner", lambda: None)
-    monkeypatch.setattr(main, "print_scan_start", lambda *a, **k: None)
-    monkeypatch.setattr(main, "print_results", lambda *a, **k: None)
-    monkeypatch.setattr(main, "console", spy)
-    monkeypatch.setattr(main.sys, "argv", ["main.py", "testuser", "--breach", "--no-deep"])
-
-    main.main()
-
-    cfg = seen["cfg"]
-    assert cfg.email is True
-    assert cfg.breach is True
-    assert any("auto-enabled" in call for call in spy.calls)
 
 
 def test_engine_warns_when_hibp_key_missing(monkeypatch):

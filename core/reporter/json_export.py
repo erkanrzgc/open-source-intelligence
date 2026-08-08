@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from core.investigator_summary import build_investigator_summary
 from core.models import ScanResult
-from core.reporter.console_ui import console
+from core.reporter.console import console
 
 
 def export_json(result: ScanResult, filepath: str) -> None:

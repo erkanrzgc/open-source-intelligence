@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "cyberm4fia" / "watchlist.sqlite3"
+DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "open-source-intelligence" / "watchlist.sqlite3"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS watchlist (
@@ -52,6 +52,7 @@ class WatchEntry:
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
     return conn
 

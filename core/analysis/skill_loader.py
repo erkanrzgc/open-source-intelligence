@@ -32,6 +32,7 @@ library plus the project's ``HttpBackend`` is required.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -42,6 +43,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from core.analysis.llm import (
     DEFAULT_HTTP_API_KEY,
     DEFAULT_HTTP_MODEL,
@@ -50,6 +53,7 @@ from core.analysis.llm import (
     Backend,
     HttpBackend,
     LLMUnavailable,
+    LLMAnalyzer,
     parse_report,  # noqa: F401  (re-exported for convenience)
 )
 
@@ -59,15 +63,16 @@ log = logging.getLogger(__name__)
 SKILLS_DIR = Path(__file__).parent / "skills"
 CACHE_DIR = Path(
     os.environ.get(
-        "CYBERM4FIA_SKILL_CACHE",
-        str(Path.home() / ".cache" / "cyberm4fia" / "skills"),
+        "OSINT_SKILL_CACHE",
+        str(Path.home() / ".cache" / "open-source-intelligence" / "skills"),
     )
 )
 CACHE_TTL_SECONDS = int(
-    os.environ.get("CYBERM4FIA_SKILL_CACHE_TTL", str(24 * 3600))
+    os.environ.get("OSINT_SKILL_CACHE_TTL", str(24 * 3600))
 )
 DEFAULT_MAX_TOKENS = 512
 DEFAULT_TEMPERATURE = 0.2
+SKILL_TIMEOUT_SECONDS = float(os.environ.get("OSINT_SKILL_TIMEOUT", "180"))
 
 
 class SkillError(RuntimeError):
@@ -103,111 +108,19 @@ _SKILL_CACHE: dict[str, Skill] = {}
 
 
 def _parse_yaml_lite(text: str) -> dict[str, Any]:
-    """Minimal YAML-ish parser sufficient for skill frontmatter.
+    """Parse skill frontmatter via PyYAML.
 
-    We do not bring in PyYAML to keep deps lean. The accepted subset:
-
-        key: scalar value          # str/int/float/bool
-        key:
-          nested_key: value        # one level of indentation
-          - list item              # list of scalars
-        key: [a, b, c]             # inline list
-
-    Anything fancier (multiline strings, anchors, flow maps with objects)
-    is rejected with ``SkillError``. Skill authors must keep frontmatter
-    simple — heavy schemas should be inlined as JSON in a single-line
-    ``output_schema: { ... }`` declaration.
+    Heavy schemas should be inlined as JSON in a single-line
+    ``output_schema: { ... }`` declaration so they survive the
+    YAML → dict roundtrip unchanged.
     """
-    result: dict[str, Any] = {}
-    current_key: str | None = None
-    current_list: list[Any] | None = None
-    current_obj: dict[str, Any] | None = None
-
-    for raw_line in text.splitlines():
-        line = raw_line.rstrip()
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip())
-        stripped = line.strip()
-
-        if indent == 0:
-            current_list = None
-            current_obj = None
-            current_key = None
-            if ":" not in stripped:
-                raise SkillError(f"frontmatter line missing colon: {stripped!r}")
-            key, _, rest = stripped.partition(":")
-            key = key.strip()
-            rest = rest.strip()
-            if not rest:
-                # Either nested object or nested list — decided by next line.
-                result[key] = {}
-                current_key = key
-                current_list = None
-                current_obj = result[key]
-            elif rest.startswith("[") and rest.endswith("]"):
-                # Inline list
-                inner = rest[1:-1].strip()
-                items = [_coerce(p.strip()) for p in inner.split(",") if p.strip()]
-                result[key] = items
-            elif rest.startswith("{"):
-                # Inline JSON (allows output_schema in one line)
-                try:
-                    result[key] = json.loads(rest)
-                except json.JSONDecodeError as exc:
-                    raise SkillError(
-                        f"frontmatter key {key!r}: invalid inline JSON ({exc})"
-                    ) from exc
-            else:
-                result[key] = _coerce(rest)
-        else:
-            # Indented continuation — either dict child or list child.
-            if current_key is None:
-                raise SkillError(f"unexpected indent at: {stripped!r}")
-            if stripped.startswith("- "):
-                if not isinstance(result[current_key], list):
-                    if isinstance(result[current_key], dict) and not result[current_key]:
-                        result[current_key] = []
-                    else:
-                        raise SkillError(
-                            f"key {current_key!r} contains both list and dict children"
-                        )
-                result[current_key].append(_coerce(stripped[2:].strip()))
-            else:
-                if ":" not in stripped:
-                    raise SkillError(f"nested line missing colon: {stripped!r}")
-                k, _, v = stripped.partition(":")
-                if not isinstance(result[current_key], dict):
-                    raise SkillError(
-                        f"key {current_key!r} cannot mix list and dict children"
-                    )
-                result[current_key][k.strip()] = _coerce(v.strip())
+    try:
+        result = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise SkillError(f"frontmatter parse error: {exc}") from exc
+    if not isinstance(result, dict):
+        raise SkillError("frontmatter must be a YAML mapping")
     return result
-
-
-def _coerce(value: str) -> Any:
-    if value == "":
-        return ""
-    lower = value.lower()
-    if lower in ("true", "yes"):
-        return True
-    if lower in ("false", "no"):
-        return False
-    if lower in ("null", "none", "~"):
-        return None
-    # Strip quotes
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        return value[1:-1]
-    # Number
-    try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        pass
-    return value
 
 
 def load_skill(name: str, *, force_reload: bool = False) -> Skill:
@@ -321,7 +234,38 @@ class SkillBudget:
 # ── Execution ─────────────────────────────────────────────────────────
 
 
-_JSON_BLOB_RE = re.compile(r"\{.*\}", re.DOTALL)
+def _find_balanced_json(text: str) -> str | None:
+    """Locate the first balanced ``{...}`` block in *text*.
+
+    Returns the substring (including outer braces) or ``None``.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape_next = False
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if escape_next:
+                escape_next = False
+            elif ch == "\\":
+                escape_next = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        i += 1
+    return None
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -335,11 +279,11 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
-    match = _JSON_BLOB_RE.search(cleaned)
-    if not match:
+    blob = _find_balanced_json(cleaned)
+    if blob is None:
         raise SkillError(f"no JSON object in response: {text[:200]!r}")
     try:
-        parsed = json.loads(match.group(0))
+        parsed = json.loads(blob)
     except json.JSONDecodeError as exc:
         raise SkillError(f"invalid JSON in response: {exc}") from exc
     if not isinstance(parsed, dict):
@@ -383,15 +327,13 @@ def _validate_against_schema(payload: dict[str, Any], schema: dict[str, Any]) ->
 
 
 def _default_backend() -> Backend:
-    return HttpBackend(
-        DEFAULT_HTTP_URL,
-        model=DEFAULT_HTTP_MODEL,
-        api_key=DEFAULT_HTTP_API_KEY,
-        timeout=DEFAULT_HTTP_TIMEOUT,
-    )
+    try:
+        return LLMAnalyzer.from_env()._backend
+    except LLMUnavailable as exc:
+        raise SkillError(f"no LLM backend available: {exc}") from exc
 
 
-def run_skill(
+async def run_skill(
     name: str,
     inputs: dict[str, Any],
     *,
@@ -422,12 +364,17 @@ def run_skill(
 
     user_prompt = json.dumps(inputs, ensure_ascii=False, indent=2, default=str)
     try:
-        raw = backend.complete(
-            skill.system_prompt,
-            user_prompt,
-            max_tokens=skill.max_tokens,
-            temperature=skill.temperature,
+        raw = await asyncio.wait_for(
+            backend.complete(
+                skill.system_prompt,
+                user_prompt,
+                max_tokens=skill.max_tokens,
+                temperature=skill.temperature,
+            ),
+            timeout=SKILL_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        raise SkillError(f"skill {name!r} timed out after {SKILL_TIMEOUT_SECONDS}s")
     except LLMUnavailable as exc:
         raise SkillError(f"backend failed for skill {name!r}: {exc}") from exc
 

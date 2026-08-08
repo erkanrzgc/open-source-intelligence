@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import os
+import random
 import time
 from collections import defaultdict
 from urllib.parse import urlparse
@@ -34,6 +35,11 @@ from modules.stealth import DomainRateBucket, fingerprint_headers, pick_ua
 from modules.stealth.tor_control import CircuitRotator
 
 log = get_logger(__name__)
+
+
+def _backoff(attempt: int) -> float:
+    """Exponential backoff with jitter to avoid thundering-herd on mass retries."""
+    return RETRY_DELAY * (2 ** attempt) * random.uniform(0.5, 1.5)
 
 
 def _env_truthy(key: str) -> bool:
@@ -73,7 +79,7 @@ class HTTPClient:
         self._request_timeout = request_timeout or REQUEST_TIMEOUT
         self._fingerprint = fingerprint
         self._verify_tls = (
-            not _env_truthy("CYBERM4FIA_INSECURE_TLS")
+            not _env_truthy("OSINT_INSECURE_TLS")
             if verify_tls is None
             else verify_tls
         )
@@ -245,7 +251,7 @@ class HTTPClient:
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, "", elapsed, None
-                await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+                await asyncio.sleep(_backoff(attempt))
             return -1, "", 0.0, None
         finally:
             host_lock.release()
@@ -287,7 +293,7 @@ class HTTPClient:
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, None, elapsed
-                await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+                await asyncio.sleep(_backoff(attempt))
             return -1, None, 0.0
         finally:
             host_lock.release()
@@ -341,7 +347,7 @@ class HTTPClient:
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, None, elapsed
-                await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+                await asyncio.sleep(_backoff(attempt))
             return -1, None, 0.0
         finally:
             host_lock.release()
@@ -381,7 +387,7 @@ class HTTPClient:
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, None, elapsed
-                await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+                await asyncio.sleep(_backoff(attempt))
             return -1, None, 0.0
         finally:
             host_lock.release()

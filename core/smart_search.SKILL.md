@@ -14,7 +14,7 @@ triggers:
   - Always indirectly via cfg.recursive (which generates variations to probe)
 dependencies:
   - utils.helpers (extract_emails_from_text, extract_urls_from_text)
-ai_required: false  # supersedes by the recon/handle_generator + AI handle_generator skill for --name mode
+ai_required: false  # augmented by the handle-generator module and skill when cfg.full_name is set
 ---
 
 ## generate_variations rules

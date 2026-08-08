@@ -11,11 +11,19 @@ from typing import Any
 
 
 def _escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+_VALID_SHAPES = frozenset({"box", "ellipse", "circle", "doublecircle", "hexagon", "diamond", "plaintext"})
+_VALID_COLORS = frozenset({
+    "steelblue", "crimson", "forestgreen", "darkorange", "purple", "gray",
+    "red", "blue", "green", "orange", "black",
+})
 
 
 def _node(node_id: str, label: str, shape: str, color: str) -> str:
-    return f'  "{_escape(node_id)}" [label="{_escape(label)}", shape={shape}, color={color}];'
+    safe_shape = shape if shape in _VALID_SHAPES else "box"
+    safe_color = color if color in _VALID_COLORS else "black"
+    return f'  "{_escape(node_id)}" [label="{_escape(label)}", shape={safe_shape}, color={safe_color}];'
 
 
 def render_dot(result: Any) -> str:
@@ -24,7 +32,7 @@ def render_dot(result: Any) -> str:
     username = payload.get("username", "?")
 
     lines: list[str] = [
-        f'digraph "cyberm4fia_{_escape(username)}" {{',
+        f'digraph "open_source_intelligence_{_escape(username)}" {{',
         "  rankdir=LR;",
         '  node [fontname="Helvetica"];',
         _node(f"user:{username}", username, "doublecircle", "darkorange"),
@@ -52,7 +60,7 @@ def render_dot(result: Any) -> str:
         if node_id in seen:
             continue
         seen.add(node_id)
-        color = "crimson" if email.get("breach_count", 0) > 0 else "forestgreen"
+        color = "crimson" if isinstance(email.get("breach_count"), (int, float)) and email.get("breach_count", 0) > 0 else "forestgreen"
         lines.append(_node(node_id, addr, "ellipse", color))
         lines.append(
             f'  "user:{_escape(username)}" -> "{_escape(node_id)}" [label="email"];'

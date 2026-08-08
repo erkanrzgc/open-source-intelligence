@@ -21,7 +21,7 @@ _DEFAULT_BINARY = "obscura"
 
 
 def _binary_path() -> str | None:
-    configured = os.environ.get("CYBERM4FIA_OBSCURA_BIN", "").strip()
+    configured = os.environ.get("OSINT_OBSCURA_BIN", "").strip()
     if configured:
         path = Path(configured).expanduser()
         return str(path) if path.is_file() else None
@@ -75,7 +75,7 @@ async def fetch_rendered(
         cmd.extend(["--selector", wait_for_selector])
     if user_agent:
         cmd.extend(["--user-agent", user_agent])
-    if os.environ.get("CYBERM4FIA_OBSCURA_STEALTH", "").strip().lower() in {
+    if os.environ.get("OSINT_OBSCURA_STEALTH", "").strip().lower() in {
         "1",
         "true",
         "yes",

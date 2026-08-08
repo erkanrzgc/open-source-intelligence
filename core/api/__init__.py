@@ -1,7 +1,7 @@
 """FastAPI REST surface — optional dependency.
 
 The app factory lives in :mod:`core.api.server` behind a lazy import so
-FastAPI isn't a hard requirement for the CLI.
+FastAPI remains an optional dependency for library and MCP consumers.
 """
 
 from __future__ import annotations

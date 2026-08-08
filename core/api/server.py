@@ -1,9 +1,7 @@
 """FastAPI REST server.
 
-Exposes a thin JSON surface over the scan engine, watchlist, and
-history store. Intentionally kept flat — one file, no routers, no
-background queues — because the CLI is still the first-class client
-and the API is a supplementary surface.
+Exposes the primary HTTP surface over the scan engine, job queue,
+watchlist, cases, and history store.
 """
 
 from __future__ import annotations
@@ -25,7 +23,7 @@ from core.api.cytoscape import payload_to_cytoscape
 from core.api.jobs import ScanJobStore
 from core.capabilities import collect_capabilities
 from core.compare import compare_payloads
-from core.config import ScanConfig
+from core.config import REQUEST_TIMEOUT, ScanConfig
 from core.correlation import correlate
 from core.engine import run_scan
 from core.history import diff_entries, get_latest, get_scan, list_scans
@@ -89,15 +87,54 @@ class ScanRequest(BaseModel):
     photo: bool = False
     dns: bool = False
     subdomain: bool = False
+    holehe: bool = False
+    ghunt: bool = False
+    toutatis: bool = False
     recursive: bool = False
+    recursive_depth: int = Field(default=1, ge=1)
     passive: bool = False
+    passive_domain: str | None = None
     reverse_image: bool = False
     past_usernames: bool = False
+    phone: str | None = None
+    phone_region: str | None = None
+    crypto_addresses: list[str] = Field(default_factory=list)
     enrichment: bool = True
     tor: bool = False
     proxy: str | None = None
+    proxies: list[str] = Field(default_factory=list)
     categories: list[str] | None = None
+    request_timeout: int = Field(default=REQUEST_TIMEOUT, ge=1)
     fp_threshold: float = 0.45
+    fingerprint: bool = True
+    new_circuit_every: int = Field(default=0, ge=0)
+    tor_control_password: str | None = None
+    playwright: bool = False
+    browser_backend: str = Field(default="playwright", pattern="^(playwright|obscura)$")
+    no_auto_render: bool = False
+    screenshots: bool = False
+    screenshot_dir: str | None = None
+    geocode: bool = False
+    redteam_domain: str | None = None
+    redteam_names_file: str | None = None
+    redteam_github_org: str | None = None
+    gitleaks_paths: list[str] = Field(default_factory=list)
+    gitleaks_no_git: bool = False
+    gitleaks_timeout: int = Field(default=120, ge=1)
+    exif_image_urls: list[str] = Field(default_factory=list)
+    bssid: str | None = None
+    ssid: str | None = None
+    company_query: str | None = None
+    company_limit: int = Field(default=5, ge=1)
+    harvest_doc_urls: list[str] = Field(default_factory=list)
+    intelx_term: str | None = None
+    intelx_limit: int = Field(default=50, ge=1)
+    full_name: str | None = None
+    name_year: int | None = None
+    name_max_handles: int = Field(default=8, ge=1)
+    email_only: str | None = None
+    ai_skills: bool = False
+    ai_skill_budget: int = Field(default=20, ge=0)
     save_history: bool = True
     case_id: int | None = None
 
@@ -155,15 +192,54 @@ def _cfg_from_request(req: ScanRequest) -> ScanConfig:
         photo=req.photo,
         dns=req.dns,
         subdomain=req.subdomain,
+        holehe=req.holehe,
+        ghunt=req.ghunt,
+        toutatis=req.toutatis,
         recursive=req.recursive,
+        recursive_depth=req.recursive_depth,
         passive=req.passive,
+        passive_domain=req.passive_domain,
         reverse_image=req.reverse_image,
         past_usernames=req.past_usernames,
+        phone=req.phone,
+        phone_region=req.phone_region,
+        crypto_addresses=tuple(req.crypto_addresses),
         enrichment=req.enrichment,
         tor=req.tor,
         proxy=req.proxy,
+        proxies=tuple(req.proxies),
         categories=tuple(req.categories) if req.categories else None,
+        request_timeout=req.request_timeout,
         fp_threshold=req.fp_threshold,
+        fingerprint=req.fingerprint,
+        new_circuit_every=req.new_circuit_every,
+        tor_control_password=req.tor_control_password,
+        playwright=req.playwright,
+        browser_backend=req.browser_backend,
+        no_auto_render=req.no_auto_render,
+        screenshots=req.screenshots,
+        screenshot_dir=req.screenshot_dir,
+        geocode=req.geocode,
+        redteam_domain=req.redteam_domain,
+        redteam_names_file=req.redteam_names_file,
+        redteam_github_org=req.redteam_github_org,
+        gitleaks_paths=tuple(req.gitleaks_paths),
+        gitleaks_no_git=req.gitleaks_no_git,
+        gitleaks_timeout=req.gitleaks_timeout,
+        exif_image_urls=tuple(req.exif_image_urls),
+        bssid=req.bssid,
+        ssid=req.ssid,
+        company_query=req.company_query,
+        company_limit=req.company_limit,
+        harvest_doc_urls=tuple(req.harvest_doc_urls),
+        intelx_term=req.intelx_term,
+        intelx_limit=req.intelx_limit,
+        full_name=req.full_name,
+        name_year=req.name_year,
+        name_max_handles=req.name_max_handles,
+        email_only=req.email_only,
+        ai_skills=req.ai_skills,
+        ai_skill_budget=req.ai_skill_budget,
     )
 
 
@@ -186,7 +262,7 @@ async def _execute_api_scan(req: ScanRequest) -> dict[str, Any]:
 def build_app() -> FastAPI:
     dependencies = [Depends(_auth_dependency)] if auth.is_auth_required() else None
     app = FastAPI(
-        title="cyberm4fia-osint API",
+        title="Open Source Intelligence API",
         version="0.3.0",
         description="REST surface around the OSINT scan engine.",
         dependencies=dependencies,
@@ -494,8 +570,10 @@ def build_app() -> FastAPI:
         b: str,
         platform: str = "github",
         max_pages: int = 5,
+        github_token: str | None = None,
     ) -> dict[str, Any]:
         """Compare follower/following overlap between two accounts."""
+        import os
         a_clean, b_clean = a.strip(), b.strip()
         if not a_clean or not b_clean:
             raise HTTPException(status_code=422, detail="both a and b are required")
@@ -504,12 +582,13 @@ def build_app() -> FastAPI:
                 status_code=400,
                 detail=f"platform {platform!r} not supported (only 'github')",
             )
+        token = github_token or os.environ.get("GITHUB_TOKEN") or None
         async with HTTPClient() as client:
             neighbors_a = await fetch_github_neighbors(
-                client, a_clean, max_pages=max_pages
+                client, a_clean, max_pages=max_pages, token=token
             )
             neighbors_b = await fetch_github_neighbors(
-                client, b_clean, max_pages=max_pages
+                client, b_clean, max_pages=max_pages, token=token
             )
         overlap = compute_overlap(neighbors_a, neighbors_b)
         return {
@@ -737,7 +816,7 @@ def build_app() -> FastAPI:
             index_path = _WEB_DIR / "index.html"
             if index_path.exists():
                 return FileResponse(str(index_path))
-            return JSONResponse({"message": "cyberm4fia-osint API", "docs": "/docs"})
+            return JSONResponse({"message": "Open Source Intelligence API", "docs": "/docs"})
 
         @app.get("/static/{asset_path:path}", response_model=None)
         def static_asset(asset_path: str):
@@ -749,7 +828,7 @@ def build_app() -> FastAPI:
     else:
         @app.get("/")
         def index_fallback() -> dict[str, Any]:
-            return {"message": "cyberm4fia-osint API", "docs": "/docs"}
+            return {"message": "Open Source Intelligence API", "docs": "/docs"}
 
     return app
 

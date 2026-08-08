@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ import httpx  # noqa: E402
 
 from core import api, auth, cases, history, watchlist  # noqa: E402
 from core.api import server as api_server  # noqa: E402
+from core.config import ScanConfig  # noqa: E402
 from core.models import PlatformResult, ScanResult  # noqa: E402
 
 if Path(fastapi_mod.__file__).as_posix().startswith("/usr/lib/python3/dist-packages/"):
@@ -122,6 +124,12 @@ def test_health(client: TestClient) -> None:
     assert r.json()["status"] == "ok"
 
 
+def test_openapi_uses_project_name(client: TestClient) -> None:
+    r = client.get("/openapi.json")
+    assert r.status_code == 200
+    assert r.json()["info"]["title"] == "Open Source Intelligence API"
+
+
 def test_scan_endpoint_returns_payload(client: TestClient) -> None:
     r = client.post(
         "/scan",
@@ -142,6 +150,38 @@ def test_scan_endpoint_returns_payload(client: TestClient) -> None:
 def test_scan_rejects_empty_username(client: TestClient) -> None:
     r = client.post("/scan", json={"username": "", "save_history": False})
     assert r.status_code == 422
+
+
+def test_scan_request_maps_advanced_config_fields() -> None:
+    req = api_server.ScanRequest(
+        username="alice",
+        holehe=True,
+        recursive_depth=2,
+        crypto_addresses=["0xabc"],
+        proxies=["http://proxy.example:8080"],
+        browser_backend="obscura",
+        gitleaks_paths=["/workspace/repo"],
+        exif_image_urls=["https://example.test/photo.jpg"],
+        company_query="Example Ltd",
+        full_name="Alice Example",
+        ai_skills=True,
+    )
+    cfg = api_server._cfg_from_request(req)
+    assert cfg.holehe is True
+    assert cfg.recursive_depth == 2
+    assert cfg.crypto_addresses == ("0xabc",)
+    assert cfg.proxies == ("http://proxy.example:8080",)
+    assert cfg.browser_backend == "obscura"
+    assert cfg.gitleaks_paths == ("/workspace/repo",)
+    assert cfg.exif_image_urls == ("https://example.test/photo.jpg",)
+    assert cfg.company_query == "Example Ltd"
+    assert cfg.full_name == "Alice Example"
+    assert cfg.ai_skills is True
+
+
+def test_scan_request_covers_scan_config_surface() -> None:
+    config_fields = {item.name for item in fields(ScanConfig)}
+    assert config_fields <= set(api_server.ScanRequest.model_fields)
 
 
 def test_watchlist_add_and_list(client: TestClient) -> None:

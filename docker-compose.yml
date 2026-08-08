@@ -1,52 +1,37 @@
-# cyberm4fia-osint — container topology
+# open-source-intelligence — container topology
 #
-#   api  : FastAPI REST + web UI (serves on :8000)
-#   tor  : SOCKS5 proxy on :9050 for --tor scans (optional)
+#   api : FastAPI REST + web UI (serves on :8000)
+#   tor : SOCKS5 proxy on :9050 for proxied scans (optional)
 #
-# Usage:
-#   docker compose up --build api                # scan via CLI / Web UI
-#   docker compose run --rm cli benerkanrzgc      # one-shot terminal scan
-#   docker compose --profile tor up              # route traffic through Tor
+# Usage: docker compose up --build api
 
 services:
   api:
     build: .
-    image: cyberm4fia-osint:latest
-    container_name: cyberm4fia-api
-    command: ["--serve", "--host", "0.0.0.0", "--port", "8000"]
+    image: open-source-intelligence:latest
+    container_name: open-source-intelligence-api
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - cyberm4fia-data:/home/osint/.local/share/cyberm4fia
+      - osint-data:/home/osint/.local/share/open-source-intelligence
       - ./reports:/data
     environment:
-      - CYBERM4FIA_TELEGRAM_BOT_TOKEN
-      - CYBERM4FIA_TELEGRAM_CHAT_ID
-      - CYBERM4FIA_WEBHOOK_URL
-      - CYBERM4FIA_WEBHOOK_SECRET
+      - OSINT_TELEGRAM_BOT_TOKEN
+      - OSINT_TELEGRAM_CHAT_ID
+      - OSINT_WEBHOOK_URL
+      - OSINT_WEBHOOK_SECRET
       - OSINT_AUTH_REQUIRED
       - OSINT_AUTH_SECRET
       - HIBP_API_KEY
     restart: unless-stopped
 
-  cli:
-    image: cyberm4fia-osint:latest
-    build: .
-    profiles: ["cli"]
-    volumes:
-      - cyberm4fia-data:/home/osint/.local/share/cyberm4fia
-      - ./reports:/data
-    environment:
-      - HIBP_API_KEY
-    entrypoint: ["python", "main.py"]
-
   tor:
     image: dperson/torproxy:latest
-    container_name: cyberm4fia-tor
+    container_name: open-source-intelligence-tor
     profiles: ["tor"]
     ports:
       - "9050:9050"
     restart: unless-stopped
 
 volumes:
-  cyberm4fia-data:
+  osint-data:

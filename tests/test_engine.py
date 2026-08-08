@@ -725,46 +725,6 @@ async def test_phase_doc_metadata_extracts_batch(monkeypatch) -> None:
     assert payload["document_metadata"][1]["url"].endswith("b.pdf")
 
 
-# ── ScanConfig.from_args mapping for the new flags ────────────────
-
-
-def test_scanconfig_from_args_picks_up_new_flags() -> None:
-    """Smoke test: the new CLI flags propagate into ScanConfig."""
-    import argparse
-
-    from core.config import ScanConfig
-
-    ns = argparse.Namespace(
-        # All existing flags get falsy defaults; we only care about the new ones.
-        no_deep=True, smart=False, email=False, web=False, full=False,
-        whois=False, breach=False, photo=False, dns=False, subdomain=False,
-        holehe=False, ghunt=False, toutatis=False, recursive=False,
-        recursive_depth=1, passive=False, domain=None, reverse_image=False,
-        past_usernames=False, phone=None, phone_region=None, crypto=None,
-        proxy=None, tor=False, category=None, timeout=None,
-        deep=False, quick=True,
-        # The four new flags:
-        bssid="AA:BB:CC:DD:EE:FF",
-        ssid="ACME-Guest",
-        company="Acme Corp",
-        company_limit=3,
-        harvest_doc=["https://t.example/a.pdf", "https://t.example/b.pdf"],
-    )
-    cfg = ScanConfig.from_args(ns, "u")
-    assert cfg.bssid == "AA:BB:CC:DD:EE:FF"
-    assert cfg.ssid == "ACME-Guest"
-    assert cfg.company_query == "Acme Corp"
-    assert cfg.company_limit == 3
-    assert cfg.harvest_doc_urls == (
-        "https://t.example/a.pdf",
-        "https://t.example/b.pdf",
-    )
-    parts = cfg.mode_parts()
-    assert "Wigle" in parts
-    assert "Company" in parts
-    assert "DocMeta" in parts
-
-
 # ── _phase_intelx ───────────────────────────────────────────────────
 
 
