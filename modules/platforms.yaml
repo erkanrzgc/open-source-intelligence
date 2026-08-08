@@ -144,11 +144,6 @@ platforms:
   has_deep_scraper: true
   name: Dev.to
   url: https://dev.to/{username}
-- category: dev
-  check_type: content_present
-  name: Stack Overflow
-  success_text: class="s-user-card
-  url: https://stackoverflow.com/users/?tab=accounts&SearchOn=DisplayName&Search={username}
 - absence_strings:
   - I'm afraid you've found a page that doesn't exist on CodePen
   category: dev
@@ -924,9 +919,6 @@ platforms:
   check_method: status
   error_text: The page you are looking for could not be found
   name: Calendly
-  presence_strings:
-  - profile
-  - ' User'
   url: https://calendly.com/{username}
   url_probe: https://calendly.com/api/booking/profiles/{username}
 - absence_strings:
@@ -1826,13 +1818,8 @@ platforms:
   check_method: message
   check_type: content_absent
   error_text: "\t\tUser not found"
+  js_heavy: true
   name: BoardGameGeek
-  presence_strings:
-  - username
-  - ' style='
-  - mail
-  - "  \tstyle="
-  - ' data-username='
   url: https://boardgamegeek.com/user/{username}
 - category: content
   check_method: status
@@ -10594,13 +10581,10 @@ platforms:
   url: https://forum.hackersploit.org/u/{username}
 - category: community
   check_method: message
-  check_type: content_present
+  check_type: content_absent
+  error_text: Not found
   name: Holopin
-  presence_strings:
-  - '"available":false'
-  success_text: '"available":false'
   url: https://holopin.io/@{username}
-  url_probe: https://www.holopin.io/api/auth/username
 - absence_strings:
   - The member you specified is either invalid or doesn't exist.
   category: community
