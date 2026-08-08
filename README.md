@@ -2,14 +2,14 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python" alt="Python">
-  <img src="https://img.shields.io/badge/platforms-1900+-purple?style=flat-square" alt="Platforms">
+  <img src="https://img.shields.io/badge/platforms-791-purple?style=flat-square" alt="Platforms">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/tests-809%20passed-success?style=flat-square" alt="Tests">
 </p>
 
 <p align="center">
-  <strong>Username reconnaissance across 1900+ platforms — zero false positives.</strong><br>
-  AI-powered verification • email breach discovery • smart username variations
+  <strong>Username reconnaissance — AI-powered, zero false positives.</strong><br>
+  Email breach discovery • smart username variations • post-verify AI
 </p>
 
 ---
@@ -24,25 +24,25 @@ osint
 ```
 ╭──────────────────────────────────────────────╮
 │ Open Source Intelligence — username scanner  │
-│ ~500 verified platforms · AI validation       │
+│ 791 platforms · AI validation                │
 ╰──────────────────────────────────────────────╯
 
-Username: johndoe
+Username: erkanrzgc
 
-[1] Quick  — verified platforms (~500, AI validation)
-[2] Full   — all 1924 platforms
+[1] Quick  — 791 platforms, AI validation
+[2] Full   — all platforms
 [3] Custom — pick categories yourself
 
 Choose: 1
 
-→ Scanning 500 platforms...
+→ Scanning 791 platforms...
 → AI validating matches...
 → Verifying 15 matches...
   Real: 7  Fake: 8
 
 Results
 ┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
-┃ Confirmed platforms ┃ 7     ┃
+┃ Confirmed profiles  ┃ 7     ┃
 ┃ Time                ┃ 45.2s ┃
 ┗━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━┛
 ```
@@ -50,7 +50,7 @@ Results
 Or one-liner:
 
 ```bash
-osint scan johndoe --verified
+osint scan erkanrzgc
 ```
 
 ---
@@ -59,7 +59,7 @@ osint scan johndoe --verified
 
 | Phase | Description |
 |-------|-------------|
-| Platform sweep | Checks 1900+ sites in parallel for the username |
+| Platform sweep | Checks 791 platforms in parallel for the username |
 | AI validation | LLM evaluates borderline matches, reduces false positives |
 | Deep scrape | Extracts names, bios, locations from known platforms |
 | Smart search | Generates username variations (john → j0hn, johndoe42) |
@@ -72,9 +72,8 @@ osint scan johndoe --verified
 ## CLI reference
 
 ```bash
-osint                          # interactive mode (recommended)
+osint                          # interactive mode
 osint scan <username>          # one-liner
-osint scan <username> --verified  # verified platforms only (~500)
 osint scan <username> --smart     # username variations
 osint scan <username> --full-name "John Doe"  # name → handle resolution
 ```
@@ -127,7 +126,7 @@ from core.engine import run_scan
 
 async def main():
     cfg = ScanConfig(
-        username="johndoe",
+        username="erkanrzgc",
         deep=True,
         smart=True,
         email=True,
@@ -156,7 +155,7 @@ http://127.0.0.1:8000/docs  — OpenAPI docs
 
 ```bash
 curl -H 'Content-Type: application/json' \
-  -d '{"username":"johndoe","deep":true,"smart":true}' \
+  -d '{"username":"erkanrzgc","deep":true,"smart":true}' \
   http://127.0.0.1:8000/scan
 ```
 
@@ -208,12 +207,6 @@ mypy core modules                       # type check
 ```
 
 Unit tests use no live network.
-
----
-
-## Disclaimer
-
-This tool is for authorized security research, journalism, and defensive purposes only. Do not use it for harassment, stalking, doxing, or violating platform terms of service. You are responsible for complying with all applicable laws and platform policies.
 
 ---
 
