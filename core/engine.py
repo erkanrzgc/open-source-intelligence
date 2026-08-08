@@ -176,7 +176,8 @@ def _any_absence_match(body: str, strings: tuple[str, ...]) -> bool:
     """Return True if any absence indicator is found in *body*."""
     if not strings or not body:
         return False
-    return any(s in body for s in strings)
+    body_lower = body.lower()
+    return any(s.lower() in body_lower for s in strings)
 
 
 def _any_presence_match(body: str, strings: tuple[str, ...]) -> bool:
@@ -1020,7 +1021,7 @@ async def _phase_smart_search(
 
     important = [p for p in not_found_platforms if p.name in IMPORTANT_PLATFORMS_FOR_VARIATIONS]
     check_platforms = important[:8]
-    check_variations = variations[:5]
+    check_variations = variations[:12]
     if not check_platforms:
         console.print("  [bold green][3/8][/bold green] No platforms left to check variations on")
         return

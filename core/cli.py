@@ -246,7 +246,12 @@ async def _verify_all_matches(result: ScanResult) -> ScanResult:
                 is_real = False
 
                 if ai_available and analyzer:
-                    is_real = await _ai_verify_page(analyzer, result.username, p.platform, p.url, body[:8000])
+                    known_emails = [e.email for e in (result.emails or [])]
+                    known_handles = list(result.discovered_usernames or []) + [result.username]
+                    is_real = await _ai_verify_page(
+                        analyzer, result.username, getattr(result, "full_name", None),
+                        known_emails, known_handles, p.platform, p.url, body[:8000],
+                    )
                 else:
                     is_real = result.username.lower() in body.lower()
 
@@ -270,21 +275,27 @@ async def _verify_all_matches(result: ScanResult) -> ScanResult:
     return result
 
 
-async def _ai_verify_page(analyzer, username: str, platform: str, url: str, html: str) -> bool:
-    """Ask AI: is this page a real profile for {username} on {platform}?"""
-    import json as _json
+async def _ai_verify_page(analyzer, target_username: str, full_name: str | None, known_emails: list[str], known_handles: list[str], platform: str, url: str, html: str) -> bool:
+    """Ask AI: is this page a real profile?"""
+    import re
     from core.analysis.skill_loader import run_skill, SkillError
 
-    # Extract visible text from HTML for the LLM
-    import re
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text).strip()[:4000]
+
+    target_ctx: dict = {"username": target_username}
+    if full_name:
+        target_ctx["full_name"] = full_name
+    if known_emails:
+        target_ctx["known_emails"] = known_emails[:5]
+    if known_handles:
+        target_ctx["known_handles_on_other_platforms"] = known_handles[:10]
 
     try:
         result = await run_skill(
             "profile_validator",
             {
-                "target": {"username": username},
+                "target": target_ctx,
                 "profile": {
                     "platform": platform,
                     "url": url,
@@ -298,7 +309,7 @@ async def _ai_verify_page(analyzer, username: str, platform: str, url: str, html
         score = int(result.get("match_score", 0))
         return verdict in ("match", "likely_match") and score >= 40
     except SkillError:
-        return username.lower() in text.lower()
+        return target_username.lower() in text.lower()
 
 
 async def _interactive() -> int:

@@ -6,6 +6,7 @@ from utils.helpers import extract_emails_from_text, extract_urls_from_text
 
 
 def generate_variations(username: str) -> list[str]:
+    """Generate common username variations for discovery."""
     variations = set()
     lower = username.lower()
 
@@ -16,9 +17,16 @@ def generate_variations(username: str) -> list[str]:
             joined = sep.join(parts)
             if joined != lower:
                 variations.add(joined)
-        # reversed parts: john_doe -> doe_john
         for sep in ["", "_", ".", "-"]:
             variations.add(sep.join(reversed(parts)))
+
+    # split compound: erkanrzgc -> erkan_rzgc, erkan.rzgc
+    if len(parts) == 1 and len(lower) >= 5:
+        for i in range(3, len(lower) - 2):
+            for sep in ["_", ".", "-"]:
+                split = f"{lower[:i]}{sep}{lower[i:]}"
+                if split != lower:
+                    variations.add(split)
 
     # strip trailing digits
     stripped = re.sub(r"\d+$", "", lower)
@@ -31,12 +39,25 @@ def generate_variations(username: str) -> list[str]:
         variations.add(clean)
 
     # common suffixes
-    for suffix in ["_", "0", "1", "x", "official", "real", "dev"]:
+    for suffix in ["_", "0", "1", "2", "123", "x", "x_", "_x", "official", "real", "dev", "music", "gaming"]:
         variations.add(f"{lower}{suffix}")
 
     # common prefixes
-    for prefix in ["_", "x", "the", "real", "its"]:
+    for prefix in ["_", "x", "the", "real", "its", "im", "hey"]:
         variations.add(f"{prefix}{lower}")
+
+    # year suffixes (common birth year / graduation year patterns)
+    for year in ("99", "00", "01", "02", "1999", "2000", "2001"):
+        variations.add(f"{lower}{year}")
+
+    # leet-speak substitutions
+    leet_map = {"o": "0", "l": "1", "e": "3", "a": "4", "s": "5", "t": "7", "b": "8", "g": "9"}
+    leet = lower
+    for char, sub in leet_map.items():
+        if char in leet:
+            leet = leet.replace(char, sub)
+    if leet != lower:
+        variations.add(leet)
 
     variations.discard(lower)
     variations.discard("")

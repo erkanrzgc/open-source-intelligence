@@ -309,7 +309,7 @@ async def test_phase_smart_search_checks_variations_with_scan_config(monkeypatch
         result=result,
     )
 
-    assert "alice" in checked
+    assert "alice" in checked  # stripped trailing digits
     assert any(r.status == "found (variation)" for r in result.platforms)
 
 
