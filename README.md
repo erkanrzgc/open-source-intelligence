@@ -14,7 +14,7 @@
 
 ---
 
-## Quickstart
+<h2 align="center">Quickstart</h2>
 
 ```bash
 git clone https://github.com/erkanrzgc/open-source-intelligence.git
@@ -57,7 +57,7 @@ osint scan erkanrzgc
 
 ---
 
-## What it does
+<h2 align="center">What it does</h2>
 
 | Phase | Description |
 |-------|-------------|
@@ -71,7 +71,7 @@ osint scan erkanrzgc
 
 ---
 
-## CLI reference
+<h2 align="center">CLI reference</h2>
 
 ```bash
 osint                          # interactive mode
@@ -85,7 +85,7 @@ Results saved to `log/<username>/<timestamp>.json`.
 
 ---
 
-## Installation
+<h2 align="center">Installation</h2>
 
 Python 3.10+ required.
 
@@ -120,7 +120,7 @@ Without an API key, AI features gracefully fall back to strict body-based checks
 
 ---
 
-## Python library
+<h2 align="center">Python library</h2>
 
 ```python
 import asyncio
@@ -145,7 +145,7 @@ asyncio.run(main())
 
 ---
 
-## Web API
+<h2 align="center">Web API</h2>
 
 ```bash
 python -m uvicorn core.api.server:build_app --factory --host 127.0.0.1 --port 8000
@@ -164,7 +164,7 @@ curl -H 'Content-Type: application/json' \
 
 ---
 
-## MCP server
+<h2 align="center">MCP server</h2>
 
 ```bash
 python mcp_server.py
@@ -183,7 +183,7 @@ python mcp_server.py
 
 ---
 
-## Docker
+<h2 align="center">Docker</h2>
 
 ```bash
 docker build -t open-source-intelligence .
@@ -198,7 +198,7 @@ docker compose up --build api
 
 ---
 
-## Configuration
+<h2 align="center">Configuration</h2>
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -215,7 +215,7 @@ See `.env.example` for all options.
 
 ---
 
-## Development
+<h2 align="center">Development</h2>
 
 ```bash
 pip install -e '.[dev,api]'
@@ -228,6 +228,8 @@ Unit tests use no live network.
 
 ---
 
-## License
+<h2 align="center">License</h2>
 
-[MIT](LICENSE) © erkanrzgc
+<p align="center">
+  <a href="LICENSE">MIT</a> © erkanrzgc
+</p>
