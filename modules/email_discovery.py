@@ -5,14 +5,47 @@ from core.models import EmailResult
 from utils.helpers import md5_hash
 
 COMMON_DOMAINS = [
+    # global personal
     "gmail.com",
     "yahoo.com",
     "outlook.com",
     "hotmail.com",
+    "live.com",
     "protonmail.com",
+    "proton.me",
+    "pm.me",
     "icloud.com",
+    "me.com",
+    "mac.com",
     "mail.com",
     "yandex.com",
+    "yandex.ru",
+    # business / privacy
+    "zoho.com",
+    "fastmail.com",
+    "tutanota.com",
+    "tuta.io",
+    "hey.com",
+    "skiff.com",
+    "mailbox.org",
+    # regional
+    "web.de",
+    "gmx.de",
+    "gmx.net",
+    "gmx.com",
+    "rambler.ru",
+    "mail.ru",
+    "inbox.ru",
+    "list.ru",
+    "bk.ru",
+    "qq.com",
+    "163.com",
+    "126.com",
+    "foxmail.com",
+    "sina.com",
+    "sohu.com",
+    "rediffmail.com",
+    "in.com",
 ]
 
 
@@ -35,22 +68,45 @@ def generate_email_candidates(username: str, full_name: str | None = None) -> li
         parts = [p.lower().strip() for p in full_name.split() if p.strip()]
         if len(parts) >= 2:
             first, last = parts[0], parts[-1]
+            fi, li = first[0], last[0]  # initials
             patterns = [
-                f"{first}.{last}",           # erkan.rizgic
-                f"{first}{last}",            # erkanrizgic
-                f"{last}.{first}",           # rizgic.erkan
-                f"{last}{first}",            # rizgicerkan
-                f"{first[0]}.{last}",        # e.rizgic
-                f"{first[0]}{last}",         # erizgic
-                f"{first}.{last[0]}",        # erkan.r
-                f"{first}",                  # erkan
-                f"{last}",                   # rizgic
+                # first-last combos
+                f"{first}.{last}",
+                f"{first}{last}",
+                f"{first}_{last}",
+                f"{first}-{last}",
+                f"{last}.{first}",
+                f"{last}{first}",
+                f"{last}_{first}",
+                f"{last}-{first}",
+                # initial combos
+                f"{fi}.{last}",
+                f"{fi}_{last}",
+                f"{fi}{last}",
+                f"{first}.{li}",
+                f"{first}_{li}",
+                f"{first}{li}",
+                f"{fi}.{li}",
+                f"{fi}_{li}",
+                f"{fi}{li}",
+                # standalone
+                f"{first}",
+                f"{last}",
+                # common suffixes on first name
+                f"{first}_",
+                f"{first}01",
+                f"{first}1",
+                f"{first}123",
             ]
             if len(parts) >= 3:
                 middle = parts[1]
+                mi = middle[0]
                 patterns.extend([
-                    f"{first}{middle[0]}{last}",     # erkanrrizgic
-                    f"{first[0]}{middle[0]}{last}",  # errrizgic
+                    f"{first}.{mi}.{last}",
+                    f"{fi}{mi}{last}",
+                    f"{first}{mi}{last}",
+                    f"{first}_{mi}_{last}",
+                    f"{fi}.{mi}.{last}",
                 ])
             for pattern in patterns:
                 for domain in COMMON_DOMAINS:

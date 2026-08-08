@@ -56,11 +56,11 @@ def _coerce(entry: dict[str, Any]) -> Platform:
     category = entry.get("category")
     if not (isinstance(name, str) and isinstance(url, str) and isinstance(category, str)):
         raise ValueError(f"platform entry missing name/url/category: {entry!r}")
-    if "{username}" not in url:
-        raise ValueError(f"platform {name!r} url must contain {{username}}")
     check_type = entry.get("check_type", "status")
     if check_type not in _VALID_CHECK_TYPES:
         raise ValueError(f"platform {name!r} invalid check_type {check_type!r}")
+    if "{username}" not in url and check_type != "json_api":
+        raise ValueError(f"platform {name!r} url must contain {{username}}")
     headers = entry.get("headers")
     if headers is not None and not isinstance(headers, dict):
         raise ValueError(f"platform {name!r} headers must be a mapping")
