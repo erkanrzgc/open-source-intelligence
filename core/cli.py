@@ -155,10 +155,10 @@ def _selected_platforms(categories: tuple[str, ...] | None) -> list:
 async def _verify_all_matches(result: ScanResult) -> ScanResult:
     """Re-check ALL found URLs. AI-powered when available, strict body check as fallback.
 
-    For each match:
-    1. URL must return HTTP 200
-    2. If LLM available → AI decides real vs fake based on page content
-    3. If LLM unavailable → body must contain username (strict fallback)
+    For non-JS-heavy platforms, fetch via aiohttp directly.
+    For js_heavy platforms (SPA/React sites like TikTok, Instagram), render
+    via Playwright first so the AI can evaluate actual page content instead
+    of an empty SPA shell.
     """
     import aiohttp
 
@@ -168,7 +168,6 @@ async def _verify_all_matches(result: ScanResult) -> ScanResult:
 
     console.print(f"\n  [yellow]Verifying {len(candidates)} matches...[/yellow]")
 
-    # Check if AI is available
     ai_available = False
     try:
         from core.analysis.llm import LLMAnalyzer, LLMUnavailable
@@ -177,10 +176,24 @@ async def _verify_all_matches(result: ScanResult) -> ScanResult:
     except Exception:
         analyzer = None
 
+    browser_available = False
+    try:
+        from modules.stealth.playwright_fallback import AVAILABLE as PW_AVAILABLE, fetch_rendered
+        browser_available = PW_AVAILABLE
+    except Exception:
+        browser_available = False
+
     if ai_available:
         console.print("  [green]AI-powered verification active[/green]")
     else:
         console.print("  [dim]AI unavailable — using strict body check[/dim]")
+
+    if browser_available:
+        console.print("  [green]Playwright rendering active[/green]")
+
+    # Build platform lookup for js_heavy flag
+    from modules.platforms import PLATFORMS
+    platform_map: dict[str, object] = {p.name: p for p in PLATFORMS}
 
     kept = 0
     dropped = 0
@@ -188,32 +201,65 @@ async def _verify_all_matches(result: ScanResult) -> ScanResult:
     async with aiohttp.ClientSession() as session:
         for p in candidates:
             try:
-                async with session.get(p.url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status != 200:
-                        p.exists = False
-                        p.status = "verified_bad"
-                        p.fp_signals = list(p.fp_signals) + [f"verify:{resp.status}"]
-                        dropped += 1
-                        continue
+                body = ""
+                plat_def = platform_map.get(p.platform)
+                js_heavy = getattr(plat_def, "js_heavy", False) if plat_def else False
 
-                    body = await resp.text()
-                    is_real = False
+                if js_heavy and browser_available:
+                    try:
+                        rendered = await fetch_rendered(
+                            p.url,
+                            timeout_ms=max(5000, 15 * 1000),
+                            wait_for_selector=getattr(plat_def, "wait_for_selector", None),
+                        )
+                        if rendered:
+                            body = rendered.html
+                            p.rendered = True
+                        else:
+                            raise Exception("render failed")
+                    except Exception:
+                        async with session.get(p.url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                p.exists = False
+                                p.status = "verified_bad"
+                                p.fp_signals = list(p.fp_signals) + [f"verify:{resp.status}"]
+                                dropped += 1
+                                continue
+                            body = await resp.text()
+                else:
+                    async with session.get(p.url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            p.exists = False
+                            p.status = "verified_bad"
+                            p.fp_signals = list(p.fp_signals) + [f"verify:{resp.status}"]
+                            dropped += 1
+                            continue
+                        body = await resp.text()
 
-                    if ai_available and analyzer:
-                        is_real = await _ai_verify_page(analyzer, result.username, p.platform, p.url, body[:8000])
-                    else:
-                        is_real = result.username.lower() in body.lower()
+                if not body:
+                    p.exists = False
+                    p.status = "verified_bad"
+                    p.fp_signals = list(p.fp_signals) + ["verify:empty_body"]
+                    dropped += 1
+                    continue
 
-                    if is_real:
-                        p.confidence = 1.0
-                        p.status = "verified"
-                        p.fp_signals = list(p.fp_signals) + ["verify:confirmed"]
-                        kept += 1
-                    else:
-                        p.exists = False
-                        p.status = "verified_fake"
-                        p.fp_signals = list(p.fp_signals) + ["verify:ai_rejected"]
-                        dropped += 1
+                is_real = False
+
+                if ai_available and analyzer:
+                    is_real = await _ai_verify_page(analyzer, result.username, p.platform, p.url, body[:8000])
+                else:
+                    is_real = result.username.lower() in body.lower()
+
+                if is_real:
+                    p.confidence = 1.0
+                    p.status = "verified"
+                    p.fp_signals = list(p.fp_signals) + ["verify:confirmed"]
+                    kept += 1
+                else:
+                    p.exists = False
+                    p.status = "verified_fake"
+                    p.fp_signals = list(p.fp_signals) + ["verify:ai_rejected"]
+                    dropped += 1
 
             except Exception:
                 p.exists = False
