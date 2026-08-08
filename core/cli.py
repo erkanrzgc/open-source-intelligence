@@ -52,13 +52,14 @@ def _print_header(username: str, full_name: str | None, platform_count: int) -> 
 
 
 def _print_results(result: ScanResult, elapsed: float) -> None:
-    found = [p for p in result.found_platforms if p.status == "verified"]
-    fake = [p for p in result.found_platforms if p.status in ("verified_fake", "verified_bad", "verified_error")]
+    found = [p for p in result.platforms if p.status == "verified"]
+    fake = [p for p in result.platforms if p.status in ("verified_fake", "verified_bad", "verified_error")]
     table = Table(title="Results", border_style="green")
     table.add_column("Metric", style="bold")
     table.add_column("Value")
     table.add_row("Confirmed platforms", str(len(found)))
     table.add_row("Dropped (false positive)", str(len(fake)))
+    table.add_row("Matched before verify", str(sum(1 for p in result.platforms if p.exists)))
     table.add_row("Total checked", str(result.total_checked))
     table.add_row("Emails", str(len(result.emails)))
     table.add_row("Discovered usernames", str(len(result.discovered_usernames)))
@@ -419,9 +420,8 @@ async def _interactive() -> int:
 
     log_file = _log_path(username)
 
-    ...  # continues with show_result
     log_file.write_text(
-        json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+        json.dumps(result.to_dict(include_all=True), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -517,7 +517,7 @@ async def _run_scan_fast(cfg: ScanConfig) -> int:
 
     log_file = _log_path(cfg.username)
     log_file.write_text(
-        json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+        json.dumps(result.to_dict(include_all=True), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
