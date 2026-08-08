@@ -12,11 +12,16 @@ platforms:
   - '"biography"'
   url: https://www.instagram.com/{username}/
   url_probe: https://www.instagram.com/api/v1/users/web_profile_info/?username={username}
-- category: social
+- absence_strings:
+  - '"statusCode":10221'
+  category: social
+  check_method: message
+  check_type: content_absent
+  error_text: '"statusCode":10221'
   js_heavy: true
   name: TikTok
   presence_strings:
-  - '"nickname":'
+  - '"userInfo":{"user"'
   url: https://www.tiktok.com/@{username}
 - absence_strings:
   - rsrcTags

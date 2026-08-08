@@ -53,10 +53,12 @@ def _print_header(username: str, full_name: str | None, platform_count: int) -> 
 
 def _print_results(result: ScanResult, elapsed: float) -> None:
     found = [p for p in result.found_platforms if p.status == "verified"]
+    fake = [p for p in result.found_platforms if p.status in ("verified_fake", "verified_bad", "verified_error")]
     table = Table(title="Results", border_style="green")
     table.add_column("Metric", style="bold")
     table.add_column("Value")
     table.add_row("Confirmed platforms", str(len(found)))
+    table.add_row("Dropped (false positive)", str(len(fake)))
     table.add_row("Total checked", str(result.total_checked))
     table.add_row("Emails", str(len(result.emails)))
     table.add_row("Discovered usernames", str(len(result.discovered_usernames)))
@@ -79,6 +81,17 @@ def _print_results(result: ScanResult, elapsed: float) -> None:
                 conf_str = f"{p.confidence:.0%}" if p.confidence else "?"
                 cat_table.add_row(p.platform, p.url[:55], conf_str)
             console.print(cat_table)
+
+    if fake:
+        console.print()
+        fake_table = Table(title=f"[red]Dropped[/red] ({len(fake)})", border_style="red")
+        fake_table.add_column("Platform")
+        fake_table.add_column("URL", max_width=55)
+        fake_table.add_column("Reason", style="dim")
+        for p in sorted(fake, key=lambda x: x.platform):
+            reason = p.fp_signals[-1] if p.fp_signals else p.status
+            fake_table.add_row(p.platform, p.url[:55], reason)
+        console.print(fake_table)
 
     if not found:
         console.print("\n[dim]No matches confirmed. Try fewer filters or --smart for variations.[/dim]")

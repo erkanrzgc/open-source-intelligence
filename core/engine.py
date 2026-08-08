@@ -256,6 +256,16 @@ async def _check_platform(
                     result.exists = False
                     result.status = "not_found"
                     return result
+                if _probe_data is not None and platform.absence_strings:
+                    import json as _json
+                    _probe_text = _json.dumps(_probe_data) if isinstance(_probe_data, (dict, list)) else str(_probe_data)
+                    if _any_absence_match(_probe_text, platform.absence_strings):
+                        result.http_status = _probe_status
+                        result.response_time = _probe_elapsed
+                        result.exists = False
+                        result.status = "not_found"
+                        result.fp_signals = ["url_probe_absence"]
+                        return result
 
             if _should_render(platform, cfg):
                 t0 = time.monotonic()
