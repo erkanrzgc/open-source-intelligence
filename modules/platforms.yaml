@@ -11263,6 +11263,18 @@ platforms:
   name: DIBIZ
   success_text: Add to contacts</span>
   url: https://www.dibiz.com/{username}
+- absence_strings:
+  - '"taken": false'
+  category: social
+  check_method: message
+  check_type: json_api
+  name: Discord
+  presence_strings:
+  - '"taken": true'
+  probe_body:
+    username: '{username}'
+  probe_method: POST
+  url: https://discord.com/api/v9/unique-username/username-attempt-unauthed
 - category: social
   check_type: content_present
   name: Discord (Invite)

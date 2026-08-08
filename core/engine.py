@@ -232,10 +232,24 @@ async def _check_platform(
 
     try:
         if platform.check_type == "json_api":
-            status, data, elapsed = await client.get_json(url, platform.headers)
+            import json as _json
+            if platform.probe_method == "POST" and platform.probe_body:
+                _body_str = _json.dumps(platform.probe_body).replace("{username}", username)
+                status, data, elapsed = await client.post_json(
+                    url, _json.loads(_body_str), platform.headers
+                )
+            else:
+                status, data, elapsed = await client.get_json(url, platform.headers)
             result.http_status = status
             result.response_time = elapsed
             result.exists = status == 200 and data is not None
+            if result.exists and data is not None and (platform.absence_strings or platform.presence_strings):
+                _data_text = _json.dumps(data)
+                absent = _any_absence_match(_data_text, platform.absence_strings)
+                if absent:
+                    result.exists = False
+                    result.status = "not_found"
+                    result.fp_signals = ["json_api_absence"]
         else:
             status = -1
             body: str = ""
