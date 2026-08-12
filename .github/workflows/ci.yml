@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,api,report,socks,whois,photo,dns]"
+          pip install -e ".[dev,api,report,socks,whois,photo,dns,phone]"
 
       - name: Ruff
         run: ruff check core modules utils scripts tests mcp_server.py
