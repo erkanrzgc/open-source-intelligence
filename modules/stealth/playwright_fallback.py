@@ -22,15 +22,18 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 # ── browser backend selection ──────────────────────────────────────────
-_async_playwright = None
+_async_playwright: Any = None
 _BACKEND = ""
 
 try:
-    from patchright.async_api import async_playwright as _patchright_playwright  # type: ignore[import-not-found]
+    from patchright.async_api import (
+        async_playwright as _patchright_playwright,  # type: ignore[import-not-found]
+    )
     _async_playwright = _patchright_playwright
     _BACKEND = "patchright"
     AVAILABLE = True
@@ -102,7 +105,7 @@ async def fetch_rendered(
                         await page.wait_for_selector(
                             wait_for_selector, timeout=timeout_ms
                         )
-                    except Exception:  # noqa: BLE001 - selector is best-effort
+                    except Exception:
                         log.debug("selector %s not found on %s", wait_for_selector, url)
                 html = await page.content()
                 status = response.status if response else 0
@@ -115,7 +118,7 @@ async def fetch_rendered(
                         dest = screenshot_dir / filename
                         await page.screenshot(path=str(dest), full_page=False)
                         shot_path = str(dest)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         log.debug("screenshot save failed for %s: %s", url, exc)
                 return RenderedPage(
                     url=url,
@@ -128,6 +131,6 @@ async def fetch_rendered(
                 await browser.close()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:  # noqa: BLE001 - fallback must not crash scan
+    except Exception as exc:
         log.debug("browser render failed for %s: %s", url, exc)
         return None

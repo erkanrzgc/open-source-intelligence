@@ -27,7 +27,7 @@ launch a heavy headless browser, so the bar must be obvious wall behaviour.
 from __future__ import annotations
 
 import re
-from typing import Mapping
+from collections.abc import Mapping
 
 _CF_BODY_RE = re.compile(
     r"(just a moment|attention required|checking your browser|cf-browser-verification|cf-spinner|"

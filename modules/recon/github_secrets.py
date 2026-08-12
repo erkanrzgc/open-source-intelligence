@@ -62,48 +62,48 @@ RULES: tuple[_Rule, ...] = (
     _Rule(
         rule_id="aws_access_key",
         pattern=re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-        search_token="AKIA",
+        search_token="AKIA",  # nosec B106
     ),
     _Rule(
         rule_id="github_pat",
         # Covers personal (ghp_), OAuth (gho_), user-to-server (ghu_),
         # server-to-server (ghs_), and refresh (ghr_) tokens.
         pattern=re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
-        search_token="ghp_",
+        search_token="ghp_",  # nosec B106
     ),
     _Rule(
         rule_id="slack_webhook",
         pattern=re.compile(
             r"https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+"
         ),
-        search_token="hooks.slack.com",
+        search_token="hooks.slack.com",  # nosec B106
     ),
     _Rule(
         rule_id="slack_token",
         pattern=re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
-        search_token="xoxb-",
+        search_token="xoxb-",  # nosec B106
     ),
     _Rule(
         rule_id="google_api_key",
         pattern=re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
-        search_token="AIza",
+        search_token="AIza",  # nosec B106
     ),
     _Rule(
         rule_id="stripe_live_key",
         pattern=re.compile(r"\bsk_live_[0-9a-zA-Z]{24,}\b"),
-        search_token="sk_live_",
+        search_token="sk_live_",  # nosec B106
     ),
     _Rule(
         rule_id="private_key_block",
         pattern=re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-        search_token="BEGIN PRIVATE KEY",
+        search_token="BEGIN PRIVATE KEY",  # nosec B106
     ),
     _Rule(
         rule_id="jwt_token",
         pattern=re.compile(
             r"\beyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]{10,}\b"
         ),
-        search_token="eyJhbGciOi",
+        search_token="eyJhbGciOi",  # nosec B106
     ),
 )
 

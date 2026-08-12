@@ -11,7 +11,6 @@ from modules.stealth.rate_limit import DomainRateBucket as Bucket
 from modules.stealth.tor_control import CircuitRotator
 from modules.stealth.user_agents import _POOL, UAEntry, pool_size
 
-
 # ── user_agents ─────────────────────────────────────────────────────
 
 
@@ -166,7 +165,7 @@ async def test_rate_bucket_success_decays_penalty() -> None:
 async def test_circuit_rotator_only_fires_on_threshold(monkeypatch) -> None:
     calls: list[tuple[str, int]] = []
 
-    async def fake_rotate(**kwargs):  # noqa: ANN003
+    async def fake_rotate(**kwargs):
         calls.append((kwargs.get("host", ""), kwargs.get("control_port", 0)))
         return True
 
@@ -183,7 +182,7 @@ async def test_circuit_rotator_only_fires_on_threshold(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_circuit_rotator_resets_counter_between_rotations(monkeypatch) -> None:
-    async def fake_rotate(**_kwargs):  # noqa: ANN003
+    async def fake_rotate(**_kwargs):
         return True
 
     import modules.stealth.tor_control as tc

@@ -114,7 +114,7 @@ class EnrichmentReport:
     def to_dict(self) -> dict:
         return {
             "stylometry": self.stylometry.to_dict() if self.stylometry else None,
-            "languages": [l.to_dict() for l in self.languages],
+            "languages": [language.to_dict() for language in self.languages],
             "timezones": [t.to_dict() for t in self.timezones],
             "graph": self.graph,
         }

@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - covered by skip
 from core.config import ScanConfig
 from core.engine import _check_platform
 from core.platform_loader import Platform
-
+from core.verification import evaluate_platform
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "golden_cases.yaml"
 
@@ -87,6 +87,7 @@ async def test_golden_case(case: dict):
     cfg = ScanConfig(username=case["username"])
 
     result = await _check_platform(client, cfg, platform)
+    evaluate_platform(result, threshold=cfg.fp_threshold)
 
     expect = case.get("expect", {})
     if "exists" in expect:
@@ -117,6 +118,8 @@ async def test_golden_case(case: dict):
             f"{case['case_name']}: status={result.status!r} does not contain "
             f"{expect['status_contains']!r}"
         )
+    if "verdict" in expect:
+        assert result.verification["verdict"] == expect["verdict"]
 
 
 def test_golden_cases_load_correctly():
@@ -130,3 +133,39 @@ def test_golden_cases_load_correctly():
         assert "platform_name" in case
         assert "response" in case
         assert "expect" in case
+
+
+@pytest.mark.asyncio
+async def test_golden_precision_and_recall_targets():
+    """The offline fixture threshold favours precision without losing recall."""
+    cases = _load_cases()
+    predictions: list[tuple[str, str]] = []
+    for case in cases:
+        response = case["response"]
+        platform = Platform(
+            name=case["platform_name"],
+            url=case["platform_url"],
+            category="test",
+            check_type=case["check_type"],
+            error_text=case.get("error_text", ""),
+            success_text=case.get("success_text", ""),
+        )
+        result = await _check_platform(
+            _ScriptedClient(
+                int(response["status"]),
+                response.get("body", ""),
+                response.get("final_url"),
+            ),
+            ScanConfig(username=case["username"]),
+            platform,
+        )
+        evaluate_platform(result, threshold=ScanConfig(username="x").fp_threshold)
+        predictions.append((case.get("label", "negative"), result.verification["verdict"]))
+
+    true_positive = sum(label == "positive" and verdict == "confirmed" for label, verdict in predictions)
+    false_positive = sum(label != "positive" and verdict == "confirmed" for label, verdict in predictions)
+    positives = sum(label == "positive" for label, _verdict in predictions)
+    precision = true_positive / max(1, true_positive + false_positive)
+    recall = true_positive / max(1, positives)
+    assert precision >= 0.98
+    assert recall >= 0.95

@@ -61,7 +61,7 @@ async def run_bulk(
             cfg = replace(cfg_template, username=username)
             try:
                 return await run_scan(cfg)
-            except Exception as exc:  # noqa: BLE001 — best-effort bulk runner
+            except Exception as exc:
                 log.warning("bulk scan failed for %s: %s", username, exc)
                 return ScanResult(username=username)
 

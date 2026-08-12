@@ -5,7 +5,17 @@ from pathlib import Path
 import pytest
 
 from core import platform_loader
-from core.platform_loader import Platform, _coerce, load_platforms
+from core.platform_loader import (
+    ALIAS_PROBE_PLATFORMS,
+    CORE_CATEGORY_QUOTAS,
+    FULL_CATEGORY_LIMITS,
+    MANDATORY_CORE_PLATFORMS,
+    Platform,
+    _coerce,
+    catalogue_summary,
+    load_platforms,
+    supports_confirmation,
+)
 
 
 def test_coerce_minimal():
@@ -64,10 +74,23 @@ def test_coerce_bad_headers():
 
 def test_load_platforms_default():
     platforms = load_platforms()
-    assert len(platforms) >= 80
+    assert len(platforms) == sum(FULL_CATEGORY_LIMITS.values()) == 500
     names = {p.name for p in platforms}
     assert "GitHub" in names
     assert "Instagram" in names
+
+
+def test_builtin_catalogue_contract_is_exact_and_pinned():
+    platforms = load_platforms()
+    summary = catalogue_summary(platforms)
+    core = {platform.name for platform in platforms if platform.tier == "core"}
+    aliases = {platform.name for platform in platforms if platform.alias_probe}
+
+    assert summary["core_count"] == sum(CORE_CATEGORY_QUOTAS.values()) == 100
+    assert summary["full_count"] == 500
+    assert core >= MANDATORY_CORE_PLATFORMS
+    assert aliases == set(ALIAS_PROBE_PLATFORMS)
+    assert len(aliases) == 15
 
 
 def test_user_override_adds_and_replaces(tmp_path: Path, monkeypatch):
@@ -196,5 +219,49 @@ def test_builtin_tags_known_js_heavy_sites():
     assert by_name["Instagram"].js_heavy is True
     assert by_name["TikTok"].js_heavy is True
     assert by_name["LinkedIn"].js_heavy is True
+
+
+def test_transport_shape_alone_is_not_a_confirmation_contract():
+    platform = Platform(
+        name="SearchOnly",
+        url="https://search.test/{username}",
+        category="social",
+        url_probe="https://api.test/search?q={username}",
+        has_deep_scraper=True,
+    )
+    assert supports_confirmation(platform) is False
+
+
+def test_researched_alias_contracts_gate_supported_and_unsupported_automation():
+    by_name = {platform.name: platform for platform in load_platforms()}
+
+    assert by_name["X"].automated is True
+    assert by_name["X"].headers is None
+    assert by_name["X"].url_probe is None
+    assert by_name["Twitch"].automated is True
+    assert by_name["Twitch"].url_probe is None
+    assert by_name["LinkedIn"].auth_mode == "prohibited"
+    assert by_name["LinkedIn"].automated is False
+    assert by_name["Reddit"].auth_mode == "required"
+    assert by_name["Reddit"].url_probe is None
+    assert by_name["Instagram"].has_deep_scraper is False
+
+    confirmable_aliases = {
+        name
+        for name in ALIAS_PROBE_PLATFORMS
+        if supports_confirmation(by_name[name])
+    }
+    assert confirmable_aliases == {
+        "GitHub",
+        "GitLab",
+        "Hugging Face",
+        "Dev.to",
+        "Reddit",
+        "X",
+        "YouTube",
+        "Medium",
+        "Twitch",
+        "Steam",
+    }
     # A plain-HTML site should remain aiohttp-only.
     assert by_name["GitHub"].js_heavy is False

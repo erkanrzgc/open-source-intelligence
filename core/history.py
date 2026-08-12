@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS _migrations (
 # Ordered list of migration SQL statements.
 # Append new entries here when schema changes; the version number
 # is the 1-based index in this list.
-_MIGRATIONS: list[str] = []
+_MIGRATIONS: list[str] = [
+    "ALTER TABLE scans ADD COLUMN payload_schema_version TEXT NOT NULL DEFAULT 'legacy';",
+]
 
 
 @dataclass
@@ -45,6 +47,10 @@ class HistoryEntry:
     ts: int
     found_count: int
     payload: dict
+
+    def __post_init__(self) -> None:
+        # Payloads predating identity-first alias discovery remain readable.
+        self.payload.setdefault("identity_candidates", [])
 
     @property
     def found_names(self) -> set[str]:
@@ -71,8 +77,15 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     )
     for idx, sql in enumerate(_MIGRATIONS, start=1):
         if (idx,) not in applied:
-            conn.executescript(sql)
+            try:
+                conn.executescript(sql)
+            except sqlite3.OperationalError as exc:
+                # A pre-versioned development database may already contain
+                # the column even though it has no migration ledger entry.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
             conn.execute("INSERT OR IGNORE INTO _migrations (version) VALUES (?)", (idx,))
+            conn.commit()
             log.info("history: applied migration %d", idx)
 
 
@@ -89,8 +102,15 @@ def save_scan(payload: dict, *, ts: int, db_path: Path = DEFAULT_DB_PATH) -> int
         return -1
     try:
         cur = conn.execute(
-            "INSERT INTO scans(username, ts, found_count, payload) VALUES (?, ?, ?, ?)",
-            (username, ts, found_count, json.dumps(payload, ensure_ascii=False)),
+            "INSERT INTO scans(username, ts, found_count, payload, payload_schema_version) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                username,
+                ts,
+                found_count,
+                json.dumps(payload, ensure_ascii=False),
+                str(payload.get("schema_version") or "legacy"),
+            ),
         )
         conn.commit()
         return int(cur.lastrowid or -1)
@@ -117,10 +137,12 @@ def update_scan_payload(
         return False
     try:
         cursor = conn.execute(
-            "UPDATE scans SET found_count = ?, payload = ? WHERE id = ?",
+            "UPDATE scans SET found_count = ?, payload = ?, payload_schema_version = ? "
+            "WHERE id = ?",
             (
                 int(payload.get("found_count", 0)),
                 json.dumps(payload, ensure_ascii=False),
+                str(payload.get("schema_version") or "legacy"),
                 scan_id,
             ),
         )

@@ -324,7 +324,7 @@ def main() -> None:
         json.loads(Path(args.wmn).read_text(encoding="utf-8")) if args.wmn else None
     )
 
-    curated, curated_by_name = _load_curated()
+    curated, _curated_by_name = _load_curated()
     curated_url_keys = {_url_key(p["url"]) for p in curated}
     curated_name_keys = {p["name"].lower() for p in curated}
 

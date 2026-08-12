@@ -121,6 +121,18 @@ def test_push_group_posts_expected_payload(monkeypatch):
     assert captured["body"]["targets"][0]["email"] == "a.b@acme.com"
 
 
+def test_push_group_rejects_non_object_json(monkeypatch):
+    monkeypatch.setattr(
+        gophish_client.urllib.request,
+        "urlopen",
+        lambda req, timeout, context: _FakeResponse(b"[]"),
+    )
+
+    client = GoPhishClient("https://g", "k", verify_tls=False)
+    with pytest.raises(GoPhishError, match="non-object JSON"):
+        client.push_group("team", [_cand_target()])
+
+
 def test_push_group_wraps_http_errors(monkeypatch):
     def fake_urlopen(req, timeout, context):
         raise urllib.error.HTTPError(

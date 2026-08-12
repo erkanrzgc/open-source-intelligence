@@ -11,9 +11,10 @@ from modules.deep_scrapers import (
     scrape_github,
     scrape_gitlab,
     scrape_hackernews,
-    scrape_instagram,
+    scrape_hugging_face,
     scrape_keybase,
     scrape_lichess,
+    scrape_medium,
     scrape_npm,
     scrape_reddit,
     scrape_steam,
@@ -26,15 +27,15 @@ from modules.deep_scrapers import (
 def test_registry_contains_expected_platforms():
     expected = [
         "GitHub",
-        "Reddit",
         "GitLab",
         "Dev.to",
+        "Hugging Face",
+        "Medium",
         "Hacker News",
         "Chess.com",
         "Lichess",
         "Steam",
         "Keybase",
-        "Instagram",
     ]
     for name in expected:
         assert name in DEEP_SCRAPERS
@@ -43,6 +44,7 @@ def test_registry_contains_expected_platforms():
 @pytest.mark.asyncio
 async def test_github_success():
     payload = {
+        "login": "alice",
         "name": "Alice",
         "bio": "dev",
         "location": "TR",
@@ -59,8 +61,78 @@ async def test_github_success():
         async with HTTPClient() as client:
             result = await scrape_github(client, "alice")
     assert result["name"] == "Alice"
+    assert result["username"] == "alice"
     assert result["twitter_username"] == "alice_t"
     assert result["public_repos"] == 10
+
+
+@pytest.mark.asyncio
+async def test_hugging_face_keeps_overview_when_socials_are_unavailable():
+    with aioresponses() as m:
+        m.get(
+            "https://huggingface.co/api/users/alice/overview",
+            status=200,
+            payload={
+                "user": "alice",
+                "fullname": "Alice Example",
+                "details": "security researcher",
+                "orgs": [{"fullname": "Example Org"}],
+            },
+        )
+        m.get(
+            "https://huggingface.co/api/users/alice/socials",
+            status=503,
+        )
+        async with HTTPClient() as client:
+            result = await scrape_hugging_face(client, "alice")
+
+    assert result["username"] == "alice"
+    assert result["name"] == "Alice Example"
+    assert result["organizations"] == ["Example Org"]
+    assert result["social_handles"] == {}
+
+
+@pytest.mark.asyncio
+async def test_hugging_face_rejects_missing_overview_without_social_probe():
+    with aioresponses() as m:
+        m.get(
+            "https://huggingface.co/api/users/missing-user/overview",
+            status=404,
+        )
+        async with HTTPClient() as client:
+            result = await scrape_hugging_face(client, "missing-user")
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_medium_validates_canonical_profile_feed():
+    body = """
+    <rss><channel>
+      <title>Alice on Medium</title>
+      <link><![CDATA[https://medium.com/@Alice]]></link>
+    </channel></rss>
+    """
+    with aioresponses() as mocked:
+        mocked.get("https://medium.com/feed/@alice", status=200, body=body)
+        async with HTTPClient() as client:
+            result = await scrape_medium(client, "alice")
+
+    assert result == {
+        "username": "alice",
+        "canonical_url": "https://medium.com/@Alice",
+    }
+
+
+@pytest.mark.asyncio
+async def test_medium_rejects_generic_or_mismatched_feed():
+    body = "<rss><channel><link>https://medium.com/@someone-else</link></channel></rss>"
+    with aioresponses() as mocked:
+        mocked.get("https://medium.com/feed/@alice", status=200, body=body)
+        async with HTTPClient() as client:
+            result = await scrape_medium(client, "alice")
+
+    assert result == {}
 
 
 @pytest.mark.asyncio
@@ -127,6 +199,20 @@ async def test_gitlab_empty_list():
 
 
 @pytest.mark.asyncio
+async def test_gitlab_rejects_non_exact_search_row():
+    with aioresponses() as mocked:
+        mocked.get(
+            "https://gitlab.com/api/v4/users?username=alice",
+            status=200,
+            payload=[{"name": "Alice Other", "username": "alice-other"}],
+        )
+        async with HTTPClient() as client:
+            result = await scrape_gitlab(client, "alice")
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
 async def test_devto_success():
     with aioresponses() as m:
         m.get(
@@ -137,6 +223,20 @@ async def test_devto_success():
         async with HTTPClient() as client:
             result = await scrape_devto(client, "alice")
     assert result["name"] == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_devto_rejects_non_exact_username():
+    with aioresponses() as mocked:
+        mocked.get(
+            "https://dev.to/api/users/by_username?url=alice",
+            status=200,
+            payload={"name": "Alice Other", "username": "alice-other"},
+        )
+        async with HTTPClient() as client:
+            result = await scrape_devto(client, "alice")
+
+    assert result == {}
 
 
 @pytest.mark.asyncio
@@ -241,34 +341,6 @@ async def test_keybase_empty_them():
         async with HTTPClient() as client:
             result = await scrape_keybase(client, "alice")
     assert result == {}
-
-
-@pytest.mark.asyncio
-async def test_instagram_success():
-    payload = {
-        "data": {
-            "user": {
-                "full_name": "Alice",
-                "username": "alice",
-                "biography": "bio",
-                "edge_followed_by": {"count": 1000},
-                "edge_follow": {"count": 100},
-                "edge_owner_to_timeline_media": {"count": 50},
-                "profile_pic_url_hd": "https://i/a.jpg",
-                "id": "123",
-            }
-        }
-    }
-    with aioresponses() as m:
-        m.get(
-            "https://www.instagram.com/api/v1/users/web_profile_info/?username=alice",
-            status=200,
-            payload=payload,
-        )
-        async with HTTPClient() as client:
-            result = await scrape_instagram(client, "alice")
-    assert result["name"] == "Alice"
-    assert result["followers"] == 1000
 
 
 @pytest.mark.asyncio

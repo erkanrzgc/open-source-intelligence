@@ -6,13 +6,15 @@ platforms:
   check_method: message
   check_type: content_absent
   error_text: Sorry, this page isn't available
-  has_deep_scraper: true
   js_heavy: true
   name: Instagram
+  evidence_class: heuristic
+  entity_scope: person_or_org
+  lookup_semantics: exact
+  contract_revision: '2026-08-11'
   presence_strings:
   - '"biography"'
   url: https://www.instagram.com/{username}/
-  url_probe: https://www.instagram.com/api/v1/users/web_profile_info/?username={username}
 - absence_strings:
   - '"statusCode":10221'
   category: social
@@ -22,6 +24,10 @@ platforms:
   has_deep_scraper: true
   js_heavy: true
   name: TikTok
+  evidence_class: heuristic
+  entity_scope: person_or_org
+  lookup_semantics: exact
+  contract_revision: '2026-08-11'
   presence_strings:
   - '"userInfo":{"user"'
   url: https://www.tiktok.com/@{username}
@@ -38,12 +44,17 @@ platforms:
   - Not Found
   category: social
   check_method: message
-  has_deep_scraper: true
   name: Reddit
+  evidence_class: official_exact
+  entity_scope: person
+  lookup_semantics: exact
+  auth_mode: required
+  contract_revision: reddit-oauth-2026-08
+  docs_url: https://www.reddit.com/dev/api/oauth#GET_user_{username}_about
+  automated: true
   presence_strings:
   - '"name":'
   url: https://www.reddit.com/user/{username}
-  url_probe: https://www.reddit.com/user/{username}/about.json
 - absence_strings:
   - User not found.
   category: social
@@ -79,6 +90,10 @@ platforms:
   check_type: content_absent
   error_text: If you have <strong>Telegram</strong>, you can contact
   name: Telegram
+  evidence_class: page_verified
+  entity_scope: person_or_channel
+  lookup_semantics: exact
+  contract_revision: '2026-08-11'
   url: https://t.me/{username}
   username_pattern: ^[a-zA-Z][a-zA-Z0-9_]{4,}$
 - category: social
@@ -97,7 +112,7 @@ platforms:
   - og:type" content="profile
   url: https://www.threads.net/@{username}
 - category: social
-  name: Mastodon (mastodon.social)
+  name: Mastodon
   url: https://mastodon.social/@{username}
 - absence_strings:
   - Profile not found
@@ -123,6 +138,12 @@ platforms:
   check_method: status
   has_deep_scraper: true
   name: GitHub
+  evidence_class: official_exact
+  entity_scope: person_or_org
+  lookup_semantics: exact
+  auth_mode: optional
+  contract_revision: '2026-03-10'
+  docs_url: https://docs.github.com/en/rest/users/users#get-a-user
   url: https://github.com/{username}
   url_probe: https://api.github.com/users/{username}
   username_pattern: ^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$
@@ -132,6 +153,12 @@ platforms:
   check_method: message
   has_deep_scraper: true
   name: GitLab
+  evidence_class: official_exact
+  entity_scope: person
+  lookup_semantics: exact
+  auth_mode: optional
+  contract_revision: '2026-08-11'
+  docs_url: https://docs.gitlab.com/api/users/#list-users
   url: https://gitlab.com/{username}
   url_probe: https://gitlab.com/api/v4/users?username={username}
 - category: dev
@@ -143,6 +170,12 @@ platforms:
 - category: dev
   has_deep_scraper: true
   name: Dev.to
+  evidence_class: official_exact
+  entity_scope: person_or_org
+  lookup_semantics: exact
+  auth_mode: optional
+  contract_revision: forem-v1-compat-by-username-2026-08
+  docs_url: https://developers.forem.com/api/v0
   url: https://dev.to/{username}
 - absence_strings:
   - I'm afraid you've found a page that doesn't exist on CodePen
@@ -245,14 +278,26 @@ platforms:
   error_text: The specified profile could not be found
   has_deep_scraper: true
   name: Steam
+  evidence_class: official_exact
+  entity_scope: person
+  lookup_semantics: exact
+  auth_mode: required
+  contract_revision: steam-web-api-2026-08
+  docs_url: https://partner.steamgames.com/doc/webapi/ISteamUser
   url: https://steamcommunity.com/id/{username}
 - category: gaming
   check_method: status
   check_type: content_absent
   error_text: Sorry. Unless you've got a time machine
   name: Twitch
+  evidence_class: official_exact
+  entity_scope: person_or_org
+  lookup_semantics: exact
+  auth_mode: required
+  contract_revision: twitch-helix-2026-08
+  docs_url: https://dev.twitch.tv/docs/api/reference/#get-users
+  automated: true
   url: https://www.twitch.tv/{username}
-  url_probe: https://twitchtracker.com/{username}
 - category: gaming
   has_deep_scraper: true
   name: Chess.com
@@ -311,6 +356,12 @@ platforms:
   check_method: message
   has_deep_scraper: true
   name: YouTube
+  evidence_class: official_exact
+  entity_scope: channel
+  lookup_semantics: exact
+  auth_mode: required
+  contract_revision: youtube-data-v3-2026-08
+  docs_url: https://developers.google.com/youtube/v3/docs/channels/list
   presence_strings:
   - visitorData
   - userAgent
@@ -318,9 +369,13 @@ platforms:
   username_pattern: ^[^\/]+$
 - category: content
   check_method: status
+  has_deep_scraper: true
   name: Medium
+  evidence_class: public_contract
+  entity_scope: person_or_publication
+  lookup_semantics: exact
+  contract_revision: '2026-08-11'
   url: https://medium.com/@{username}
-  url_probe: https://medium.com/feed/@{username}
 - absence_strings:
   - '"user":null'
   category: content
@@ -380,6 +435,13 @@ platforms:
   check_method: status
   js_heavy: true
   name: LinkedIn
+  evidence_class: disabled
+  entity_scope: person
+  lookup_semantics: disabled
+  auth_mode: prohibited
+  contract_revision: '2026-08-11'
+  docs_url: https://www.linkedin.com/legal/user-agreement
+  automated: false
   url: https://www.linkedin.com/in/{username}
   username_pattern: ^[a-zA-Z0-9_-]{3,100}$
 - category: professional
@@ -576,8 +638,15 @@ platforms:
   username_pattern: ^[^\.]+$
 - category: dev
   check_method: status
+  has_deep_scraper: true
   name: Hugging Face
+  evidence_class: official_exact
+  entity_scope: person_or_org
+  lookup_semantics: exact
+  contract_revision: '2026-08-11'
+  docs_url: https://huggingface.co/docs/hub/en/api
   url: https://huggingface.co/{username}
+  url_probe: https://huggingface.co/api/users/{username}/overview
 - category: content
   check_method: status
   name: Kick
@@ -723,18 +792,17 @@ platforms:
   check_method: message
   check_type: content_absent
   error_text: ' not found'
-  headers:
-    authorization: Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA
-    sec-ch-ua: Google Chrome";v="87", " Not;A Brand";v="99", "Chromium";v="87"
-    user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36
-      (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36
-    x-guest-token: '2042544199166284172'
-  has_deep_scraper: true
   name: X
+  evidence_class: official_exact
+  entity_scope: person_or_org
+  lookup_semantics: exact
+  auth_mode: required
+  contract_revision: x-api-v2-2026-08
+  docs_url: https://docs.x.com/x-api/users/lookup/introduction
+  automated: true
   presence_strings:
   - '"legacy"'
   url: https://x.com/{username}
-  url_probe: https://twitter.com/i/api/graphql/ZRnOhhXPwue_JGILb9TNug/UserByScreenName?variables=%7B%22screen_name%22%3A%22{username}%22%2C%22withHighlightedLabel%22%3Atrue%7D
   username_pattern: ^[a-zA-Z0-9_]{1,15}$
 - category: dev
   check_method: response_url
@@ -953,6 +1021,11 @@ platforms:
   check_type: content_absent
   error_text: '"items":[]'
   name: StackOverflow
+  evidence_class: heuristic
+  entity_scope: person
+  lookup_semantics: search
+  contract_revision: '2026-08-11'
+  docs_url: https://api.stackexchange.com/docs/users
   presence_strings:
   - '"items":[{'
   url: https://stackoverflow.com/users/filter?search={username}

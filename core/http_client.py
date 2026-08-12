@@ -13,11 +13,14 @@ Notes
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import itertools
 import os
 import random
+import socket
 import time
 from collections import defaultdict
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -31,10 +34,51 @@ from core.config import (
 )
 from core.logging_setup import get_logger
 from core.proxy_pool import ProxyPool
+from core.security import UnsafeTargetError, validate_http_url
 from modules.stealth import DomainRateBucket, fingerprint_headers, pick_ua
 from modules.stealth.tor_control import CircuitRotator
 
 log = get_logger(__name__)
+
+
+def _safe_log_url(url: str) -> str:
+    """Strip query/fragment data so API keys and tokens cannot enter logs."""
+    parsed = urlparse(url)
+    return parsed._replace(
+        query="[redacted]" if parsed.query else "",
+        fragment="",
+    ).geturl()
+
+
+class _SafeResolver(aiohttp.abc.AbstractResolver):
+    """Reject DNS answers that would route an external URL to a local network."""
+
+    def __init__(self, resolver: aiohttp.abc.AbstractResolver | None = None) -> None:
+        self._resolver = resolver or aiohttp.resolver.DefaultResolver()
+
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_INET,
+    ) -> list[Any]:
+        answers = await self._resolver.resolve(host, port, family)
+        for answer in answers:
+            resolved = str(answer["host"])
+            try:
+                address = ipaddress.ip_address(resolved)
+            except ValueError as exc:
+                raise UnsafeTargetError(
+                    f"DNS returned an invalid address for {host}: {resolved}"
+                ) from exc
+            if not address.is_global:
+                raise UnsafeTargetError(
+                    f"private-network DNS result is disabled: {host} -> {resolved}"
+                )
+        return answers
+
+    async def close(self) -> None:
+        await self._resolver.close()
 
 
 # ── Scrapling stealth transport (optional) ────────────────────────────
@@ -88,7 +132,11 @@ async def _try_scrapling_get(url, headers, timeout):
     except asyncio.TimeoutError:
         return 0, "", time.monotonic() - t0, None
     except Exception as exc:
-        log.debug("Scrapling fetch failed for %s: %s", url, exc)
+        log.debug(
+            "Scrapling fetch failed for %s (%s)",
+            _safe_log_url(url),
+            type(exc).__name__,
+        )
         return None
 
 
@@ -113,7 +161,8 @@ def _should_retry_scrapling(status, body, url):
 
 def _backoff(attempt: int) -> float:
     """Exponential backoff with jitter to avoid thundering-herd on mass retries."""
-    return RETRY_DELAY * (2 ** attempt) * random.uniform(0.5, 1.5)
+    # Jitter only spreads retries; it does not create security material.
+    return float(RETRY_DELAY * (2 ** attempt) * random.uniform(0.5, 1.5))  # nosec B311
 
 
 def _env_truthy(key: str) -> bool:
@@ -126,13 +175,14 @@ class HTTPClient:
         proxy: str | None = None,
         proxies: list[str] | None = None,
         tor: bool = False,
-        request_timeout: int | None = None,
+        request_timeout: float | None = None,
         *,
         fingerprint: bool = True,
         rate_bucket: DomainRateBucket | None = None,
         new_circuit_every: int = 0,
         tor_control_password: str | None = None,
         verify_tls: bool | None = None,
+        allow_private_networks: bool = False,
     ) -> None:
         if tor:
             self.proxies = ["socks5://127.0.0.1:9050"]
@@ -150,15 +200,24 @@ class HTTPClient:
             lambda: asyncio.Semaphore(PER_HOST_CONCURRENCY)
         )
         self._session: aiohttp.ClientSession | None = None
+        self._request_count = 0
         self._request_timeout = request_timeout or REQUEST_TIMEOUT
         self._fingerprint = fingerprint
+        self._allow_private_networks = allow_private_networks
         self._verify_tls = (
             not _env_truthy("OSINT_INSECURE_TLS")
             if verify_tls is None
             else verify_tls
         )
+        configured_delay = max(
+            0.0, float(os.environ.get("OSINT_RATE_LIMIT_DELAY", "0.1"))
+        )
         self._rate_bucket = rate_bucket if rate_bucket is not None else DomainRateBucket(
-            global_delay=float(os.environ.get("OSINT_RATE_LIMIT_DELAY", "0.1")),
+            # The configured pacing is per host. A global sleep serialized the
+            # 1,922-host sweep to ten requests/second and defeated concurrency.
+            min_interval=configured_delay,
+            jitter=min(0.05, configured_delay / 2),
+            global_delay=0.0,
         )
         self._rotator: CircuitRotator | None = (
             CircuitRotator(every=new_circuit_every, password=tor_control_password)
@@ -178,10 +237,15 @@ class HTTPClient:
                 ) from exc
             connector: aiohttp.BaseConnector = ProxyConnector.from_url(self.proxies[0])
         else:
+            resolver = None if self._allow_private_networks else _SafeResolver()
             connector = (
-                aiohttp.TCPConnector(limit=MAX_CONCURRENT)
+                aiohttp.TCPConnector(limit=MAX_CONCURRENT, resolver=resolver)
                 if self._verify_tls
-                else aiohttp.TCPConnector(limit=MAX_CONCURRENT, ssl=False)
+                else aiohttp.TCPConnector(
+                    limit=MAX_CONCURRENT,
+                    ssl=False,
+                    resolver=resolver,
+                )
             )
         self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
         return self
@@ -191,6 +255,11 @@ class HTTPClient:
             await self._session.close()
 
     # ── helpers ────────────────────────────────────────────────
+
+    @property
+    def request_count(self) -> int:
+        """Number of wire attempts made by this client, including retries."""
+        return self._request_count
 
     def _next_http_proxy(self) -> str | None:
         """Return the next healthy HTTP/HTTPS proxy; SOCKS handled at connector level."""
@@ -234,10 +303,17 @@ class HTTPClient:
         return self._host_semaphores[self._host(url)]
 
     async def _acquire(self, url: str) -> tuple[asyncio.Semaphore, asyncio.Semaphore]:
+        validate_http_url(url, allow_private_networks=self._allow_private_networks)
         host_lock = self._host_lock(url)
-        await self._semaphore.acquire()
-        await host_lock.acquire()
+        # Pacing happens before scarce request slots are acquired. Sleeping
+        # while holding either semaphore can deadlock a large same-host fanout.
         await self._rate_bucket.acquire(self._host(url))
+        await self._semaphore.acquire()
+        try:
+            await host_lock.acquire()
+        except BaseException:
+            self._semaphore.release()
+            raise
         return self._semaphore, host_lock
 
     @staticmethod
@@ -268,7 +344,7 @@ class HTTPClient:
         headers: dict | None = None,
         allow_redirects: bool = True,
     ) -> tuple[int, str, float]:
-        status, body, elapsed, final = await self._get_internal(
+        status, body, elapsed, _final = await self._get_internal(
             url, headers, allow_redirects=allow_redirects
         )
         # When aiohttp gets blocked (403 / empty body / CF challenge),
@@ -304,12 +380,13 @@ class HTTPClient:
     ) -> tuple[int, str, float, str | None]:
         session = self._require_session()
         merged = self._headers(headers)
-        global_lock, host_lock = await self._acquire(url)
-        try:
-            for attempt in range(RETRY_COUNT + 1):
+        for attempt in range(RETRY_COUNT + 1):
+            global_lock, host_lock = await self._acquire(url)
+            try:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
+                    self._request_count += 1
                     async with session.get(
                         url,
                         headers=merged,
@@ -317,27 +394,39 @@ class HTTPClient:
                         proxy=proxy,
                     ) as resp:
                         elapsed = time.monotonic() - start
+                        validate_http_url(
+                            str(resp.url),
+                            allow_private_networks=self._allow_private_networks,
+                        )
                         body = await resp.text(errors="replace")
                         await self._post_request(url, resp.status, resp)
                         self._record_proxy_result(proxy, success=True)
                         return resp.status, body, elapsed, str(resp.url)
                 except asyncio.TimeoutError:
                     elapsed = time.monotonic() - start
-                    log.debug("timeout on %s (attempt %d)", url, attempt + 1)
+                    log.debug(
+                        "timeout on %s (attempt %d)",
+                        _safe_log_url(url),
+                        attempt + 1,
+                    )
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return 0, "", elapsed, None
                 except (aiohttp.ClientError, OSError) as exc:
                     elapsed = time.monotonic() - start
-                    log.debug("network error on %s: %s", url, exc)
+                    log.debug(
+                        "network error on %s (%s)",
+                        _safe_log_url(url),
+                        type(exc).__name__,
+                    )
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, "", elapsed, None
-                await asyncio.sleep(_backoff(attempt))
-            return -1, "", 0.0, None
-        finally:
-            host_lock.release()
-            global_lock.release()
+            finally:
+                host_lock.release()
+                global_lock.release()
+            await asyncio.sleep(_backoff(attempt))
+        return -1, "", 0.0, None
 
     async def get_json(
         self, url: str, headers: dict | None = None
@@ -345,18 +434,23 @@ class HTTPClient:
         session = self._require_session()
         merged = self._headers(headers)
         merged["Accept"] = "application/json"
-        global_lock, host_lock = await self._acquire(url)
-        try:
-            for attempt in range(RETRY_COUNT + 1):
+        for attempt in range(RETRY_COUNT + 1):
+            global_lock, host_lock = await self._acquire(url)
+            try:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
+                    self._request_count += 1
                     async with session.get(
                         url,
                         headers=merged,
                         proxy=proxy,
                     ) as resp:
                         elapsed = time.monotonic() - start
+                        validate_http_url(
+                            str(resp.url),
+                            allow_private_networks=self._allow_private_networks,
+                        )
                         await self._post_request(url, resp.status, resp)
                         self._record_proxy_result(proxy, success=True)
                         if resp.status == 200:
@@ -365,21 +459,25 @@ class HTTPClient:
                         return resp.status, None, elapsed
                 except asyncio.TimeoutError:
                     elapsed = time.monotonic() - start
-                    log.debug("json timeout on %s", url)
+                    log.debug("json timeout on %s", _safe_log_url(url))
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return 0, None, elapsed
                 except (aiohttp.ClientError, OSError, ValueError) as exc:
                     elapsed = time.monotonic() - start
-                    log.debug("json error on %s: %s", url, exc)
+                    log.debug(
+                        "json error on %s (%s)",
+                        _safe_log_url(url),
+                        type(exc).__name__,
+                    )
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, None, elapsed
-                await asyncio.sleep(_backoff(attempt))
-            return -1, None, 0.0
-        finally:
-            host_lock.release()
-            global_lock.release()
+            finally:
+                host_lock.release()
+                global_lock.release()
+            await asyncio.sleep(_backoff(attempt))
+        return -1, None, 0.0
 
     async def post_json(
         self,
@@ -398,12 +496,13 @@ class HTTPClient:
         merged = self._headers(headers)
         merged["Accept"] = "application/json"
         merged.setdefault("Content-Type", "application/json")
-        global_lock, host_lock = await self._acquire(url)
-        try:
-            for attempt in range(RETRY_COUNT + 1):
+        for attempt in range(RETRY_COUNT + 1):
+            global_lock, host_lock = await self._acquire(url)
+            try:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
+                    self._request_count += 1
                     async with session.post(
                         url,
                         json=json_body,
@@ -411,6 +510,10 @@ class HTTPClient:
                         proxy=proxy,
                     ) as resp:
                         elapsed = time.monotonic() - start
+                        validate_http_url(
+                            str(resp.url),
+                            allow_private_networks=self._allow_private_networks,
+                        )
                         await self._post_request(url, resp.status, resp)
                         self._record_proxy_result(proxy, success=True)
                         if resp.status == 200:
@@ -419,39 +522,111 @@ class HTTPClient:
                         return resp.status, None, elapsed
                 except asyncio.TimeoutError:
                     elapsed = time.monotonic() - start
-                    log.debug("post_json timeout on %s", url)
+                    log.debug("post_json timeout on %s", _safe_log_url(url))
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return 0, None, elapsed
                 except (aiohttp.ClientError, OSError, ValueError) as exc:
                     elapsed = time.monotonic() - start
-                    log.debug("post_json error on %s: %s", url, exc)
+                    log.debug(
+                        "post_json error on %s (%s)",
+                        _safe_log_url(url),
+                        type(exc).__name__,
+                    )
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, None, elapsed
-                await asyncio.sleep(_backoff(attempt))
-            return -1, None, 0.0
-        finally:
-            host_lock.release()
-            global_lock.release()
+            finally:
+                host_lock.release()
+                global_lock.release()
+            await asyncio.sleep(_backoff(attempt))
+        return -1, None, 0.0
+
+    async def post_form(
+        self,
+        url: str,
+        form_body: dict[str, str],
+        headers: dict | None = None,
+    ) -> tuple[int, dict | None, float]:
+        """POST form-encoded data and parse a JSON object response.
+
+        OAuth token endpoints commonly require
+        ``application/x-www-form-urlencoded``. Keeping this transport here
+        prevents provider modules from bypassing the centralized URL safety,
+        proxy, retry, rate-limit and request-count policies.
+        """
+        session = self._require_session()
+        merged = self._headers(headers)
+        merged["Accept"] = "application/json"
+        merged["Content-Type"] = "application/x-www-form-urlencoded"
+        for attempt in range(RETRY_COUNT + 1):
+            global_lock, host_lock = await self._acquire(url)
+            try:
+                start = time.monotonic()
+                proxy = self._next_http_proxy()
+                try:
+                    self._request_count += 1
+                    async with session.post(
+                        url,
+                        data=form_body,
+                        headers=merged,
+                        proxy=proxy,
+                    ) as resp:
+                        elapsed = time.monotonic() - start
+                        validate_http_url(
+                            str(resp.url),
+                            allow_private_networks=self._allow_private_networks,
+                        )
+                        await self._post_request(url, resp.status, resp)
+                        self._record_proxy_result(proxy, success=True)
+                        if resp.status == 200:
+                            data = await resp.json(content_type=None)
+                            return resp.status, data, elapsed
+                        return resp.status, None, elapsed
+                except asyncio.TimeoutError:
+                    elapsed = time.monotonic() - start
+                    log.debug("post_form timeout on %s", _safe_log_url(url))
+                    self._record_proxy_result(proxy, success=False)
+                    if attempt == RETRY_COUNT:
+                        return 0, None, elapsed
+                except (aiohttp.ClientError, OSError, ValueError) as exc:
+                    elapsed = time.monotonic() - start
+                    log.debug(
+                        "post_form error on %s (%s)",
+                        _safe_log_url(url),
+                        type(exc).__name__,
+                    )
+                    self._record_proxy_result(proxy, success=False)
+                    if attempt == RETRY_COUNT:
+                        return -1, None, elapsed
+            finally:
+                host_lock.release()
+                global_lock.release()
+            await asyncio.sleep(_backoff(attempt))
+        return -1, None, 0.0
 
     async def get_bytes(
         self, url: str, headers: dict | None = None
     ) -> tuple[int, bytes | None, float]:
         session = self._require_session()
         merged = self._headers(headers)
-        global_lock, host_lock = await self._acquire(url)
-        try:
-            for attempt in range(RETRY_COUNT + 1):
+        for attempt in range(RETRY_COUNT + 1):
+            global_lock, host_lock = await self._acquire(url)
+            try:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
+                    self._request_count += 1
                     async with session.get(
                         url,
                         headers=merged,
                         proxy=proxy,
                     ) as resp:
                         elapsed = time.monotonic() - start
+                        validate_http_url(
+                            str(resp.url),
+                            allow_private_networks=self._allow_private_networks,
+                        )
                         await self._post_request(url, resp.status, resp)
                         self._record_proxy_result(proxy, success=True)
                         if resp.status == 200:
@@ -465,12 +640,16 @@ class HTTPClient:
                         return 0, None, elapsed
                 except (aiohttp.ClientError, OSError) as exc:
                     elapsed = time.monotonic() - start
-                    log.debug("bytes error on %s: %s", url, exc)
+                    log.debug(
+                        "bytes error on %s (%s)",
+                        _safe_log_url(url),
+                        type(exc).__name__,
+                    )
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
                         return -1, None, elapsed
-                await asyncio.sleep(_backoff(attempt))
-            return -1, None, 0.0
-        finally:
-            host_lock.release()
-            global_lock.release()
+            finally:
+                host_lock.release()
+                global_lock.release()
+            await asyncio.sleep(_backoff(attempt))
+        return -1, None, 0.0

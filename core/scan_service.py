@@ -13,11 +13,20 @@ from core.config import ScanConfig
 from core.investigator_summary import build_investigator_summary
 from core.logging_setup import get_logger
 from core.models import ScanResult
+from core.plugins import PluginRegistry, load_plugins
 from core.search import index_scan
 
 log = get_logger(__name__)
 
-SCAN_PAYLOAD_SCHEMA_VERSION = "2026-04-24"
+SCAN_PAYLOAD_SCHEMA_VERSION = "2026-08-09"
+_PLUGIN_REGISTRY: PluginRegistry | None = None
+
+
+def _plugin_registry() -> PluginRegistry:
+    global _PLUGIN_REGISTRY
+    if _PLUGIN_REGISTRY is None:
+        _PLUGIN_REGISTRY = load_plugins()
+    return _PLUGIN_REGISTRY
 
 
 @dataclass(frozen=True)
@@ -78,9 +87,22 @@ def complete_scan_result(
     stamp = ts if ts is not None else int(time.time())
     caps = capabilities or collect_capabilities()
     scan_warnings = list(warnings or collect_scan_warnings(cfg, capabilities=caps))
+    result.diagnostics["missing_capabilities"] = sorted(
+        name for name, meta in caps.items() if not bool(meta.get("ready"))
+    )
 
     if case_id is not None and cases.get_case(case_id, db_path=cases_db) is None:
         raise ValueError(f"case {case_id} does not exist")
+
+    plugin_diag = result.diagnostics.setdefault("phases", {}).get("plugins")
+    if not isinstance(plugin_diag, dict) or plugin_diag.get("status") != "completed":
+        plugin_started = time.monotonic()
+        stats = _plugin_registry().run_post_scan(result, cfg)
+        result.diagnostics.setdefault("phases", {})["plugins"] = {
+            "status": "completed",
+            "duration_ms": round((time.monotonic() - plugin_started) * 1000, 2),
+            "metrics": stats,
+        }
 
     watch_entry = watchlist.get(result.username, db_path=watchlist_db)
     watch_entry_id = watch_entry.id if watch_entry is not None else None

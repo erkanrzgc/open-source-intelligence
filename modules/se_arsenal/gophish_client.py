@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Iterable
 from typing import Any
+from urllib.parse import urlparse
 
 from modules.recon.models import EmailCandidate, GithubCommitter
 from modules.se_arsenal.models import GoPhishTarget
@@ -93,13 +94,17 @@ class GoPhishClient:
             raise GoPhishError("GoPhish base_url is required")
         if not api_key:
             raise GoPhishError("GoPhish api_key is required")
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise GoPhishError("GoPhish base_url must be an HTTP(S) URL")
         self._base = base_url.rstrip("/")
         self._key = api_key
         self._timeout = timeout
         self._ssl_ctx = (
             ssl.create_default_context()
             if verify_tls
-            else ssl._create_unverified_context()  # noqa: SLF001 — self-signed lab hosts
+            # Insecure TLS is available only through the explicit operator opt-in.
+            else ssl._create_unverified_context()  # nosec B323
         )
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -111,7 +116,8 @@ class GoPhishClient:
         }
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(  # noqa: S310 — validated https host
+            # The constructor has already restricted the base URL to HTTP(S).
+            with urllib.request.urlopen(  # nosec B310
                 req, timeout=self._timeout, context=self._ssl_ctx
             ) as resp:
                 body = resp.read().decode("utf-8")
@@ -121,9 +127,12 @@ class GoPhishClient:
         except urllib.error.URLError as exc:
             raise GoPhishError(f"GoPhish transport error: {exc}") from exc
         try:
-            return json.loads(body) if body else {}
+            parsed = json.loads(body) if body else {}
         except json.JSONDecodeError as exc:
             raise GoPhishError(f"GoPhish returned non-JSON body: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise GoPhishError("GoPhish returned a non-object JSON body")
+        return parsed
 
     def push_group(self, name: str, targets: list[GoPhishTarget]) -> dict[str, Any]:
         """Create a ``groups`` object. Duplicate names return 409 from GoPhish."""

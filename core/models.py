@@ -1,4 +1,39 @@
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class ProbeOutcome(str, Enum):
+    PENDING = "pending"
+    FOUND = "found"
+    NOT_FOUND = "not_found"
+    AMBIGUOUS = "ambiguous"
+    UNAVAILABLE_AUTH = "unavailable_auth"
+    UNAVAILABLE_POLICY = "unavailable_policy"
+    RATE_LIMITED = "rate_limited"
+    BLOCKED = "blocked"
+    CONTRACT_BROKEN = "contract_broken"
+    ERROR = "error"
+    INVALID = "invalid"
+
+
+def _serialize_secret_finding(value: object) -> object:
+    """Normalize legacy dict findings without retaining a raw secret value."""
+    if hasattr(value, "to_dict"):
+        return _serialize_secret_finding(value.to_dict())  # type: ignore[union-attr]
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    raw = out.pop("value", None) or out.pop("secret", None)
+    if isinstance(raw, str) and raw:
+        import hashlib
+
+        out.setdefault("fingerprint", hashlib.sha256(raw.encode()).hexdigest())
+        suffix = raw[-4:] if len(raw) >= 4 else ""
+        out.setdefault("safe_preview", f"[REDACTED …{suffix}]" if suffix else "[REDACTED]")
+        snippet = out.get("snippet")
+        if isinstance(snippet, str):
+            out["snippet"] = snippet.replace(raw, "[REDACTED]")
+    return out
 
 
 @dataclass
@@ -17,6 +52,78 @@ class PlatformResult:
     screenshot_path: str | None = None
     final_url: str | None = None  # actual URL after redirects; None if no redirect or unknown
     is_active_profile: bool | None = None  # liveness verdict (avatar/bio/og present); None when unverified
+    verification: dict = field(default_factory=dict)
+    queried_username: str = ""
+    canonical_username: str | None = None
+    probe_outcome: ProbeOutcome = ProbeOutcome.PENDING
+    evidence_class: str = "heuristic"
+    entity_scope: str = "person"
+    contract_revision: str = ""
+    confirmation_capable: bool = False
+    contract_verified: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "platform": self.platform,
+            "url": self.url,
+            "category": self.category,
+            "exists": self.exists,
+            "status": self.status,
+            "response_time": round(self.response_time, 3),
+            "profile_data": self.profile_data,
+            "rendered": self.rendered,
+            "screenshot_path": self.screenshot_path,
+            "confidence": round(self.confidence, 2),
+            "fp_signals": list(self.fp_signals),
+            "is_active_profile": self.is_active_profile,
+            "final_url": self.final_url,
+            "verification": self.verification or {
+                "verdict": "confirmed" if self.exists else "rejected",
+                "score": round(self.confidence, 3),
+                "evidence": list(self.fp_signals),
+                "reason_codes": ["legacy_result"],
+            },
+            "queried_username": self.queried_username,
+            "canonical_username": self.canonical_username,
+            "probe_outcome": self.probe_outcome.value,
+            "evidence_class": self.evidence_class,
+            "entity_scope": self.entity_scope,
+            "contract_revision": self.contract_revision,
+            "confirmation_capable": self.confirmation_capable,
+            "contract_verified": self.contract_verified,
+        }
+
+
+@dataclass
+class IdentityCandidate:
+    """A confirmed public handle presence plus identity-resolution evidence."""
+
+    username: str
+    handle_similarity: float
+    discovery_reasons: list[str] = field(default_factory=list)
+    verdict: str = "uncertain"
+    score: float = 0.0
+    evidence: list[dict] = field(default_factory=list)
+    profiles: list = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "username": self.username,
+            "handle_similarity": round(self.handle_similarity, 3),
+            "discovery_reasons": list(self.discovery_reasons),
+            "verdict": self.verdict,
+            "score": round(self.score, 3),
+            "evidence": [
+                item.to_dict() if hasattr(item, "to_dict") else item
+                for item in self.evidence
+            ],
+            "profiles": [
+                profile.to_dict() if hasattr(profile, "to_dict") else profile
+                for profile in self.profiles
+            ],
+            "warnings": list(self.warnings),
+        }
 
 
 @dataclass
@@ -79,6 +186,7 @@ class ScanResult:
     cross_reference: CrossReferenceResult = field(default_factory=CrossReferenceResult)
     variations_checked: list = field(default_factory=list)
     discovered_usernames: list = field(default_factory=list)
+    identity_candidates: list = field(default_factory=list)
     whois_records: list = field(default_factory=list)
     dns_records: dict = field(default_factory=dict)
     subdomains: list = field(default_factory=list)
@@ -104,6 +212,13 @@ class ScanResult:
     scan_time: float = 0.0
     ai_report: dict | None = None
     investigator_summary: dict | None = None
+    diagnostics: dict = field(
+        default_factory=lambda: {
+            "phases": {},
+            "warnings": [],
+            "missing_capabilities": [],
+        }
+    )
 
     @property
     def found_platforms(self):
@@ -118,30 +233,36 @@ class ScanResult:
         return len(self.platforms)
 
     def to_dict(self, *, include_all: bool = False) -> dict:
-        platforms_source = self.platforms if include_all else self.found_platforms
-        return {
+        from core.security import redact_secrets
+
+        # Uncertain candidates are intentionally retained in the default JSON
+        # payload. Rejected rows remain available through include_all=True.
+        platforms_source = (
+            self.platforms
+            if include_all
+            else [
+                p
+                for p in self.platforms
+                if p.exists or (p.verification or {}).get("verdict") == "uncertain"
+            ]
+        )
+        payload = {
             "username": self.username,
             "scan_time": round(self.scan_time, 2),
             "total_checked": self.total_checked,
             "found_count": self.found_count,
-            "platforms": [
-                {
-                    "platform": p.platform,
-                    "url": p.url,
-                    "category": p.category,
-                    "exists": p.exists,
-                    "status": p.status,
-                    "response_time": round(p.response_time, 3),
-                    "profile_data": p.profile_data,
-                    "rendered": p.rendered,
-                    "screenshot_path": p.screenshot_path,
-                    "confidence": round(p.confidence, 2),
-                    "fp_signals": list(p.fp_signals),
-                    "is_active_profile": p.is_active_profile,
-                    "final_url": p.final_url,
-                }
-                for p in platforms_source
-            ],
+            "verification_counts": {
+                verdict: sum(
+                    1
+                    for item in self.platforms
+                    if (
+                        (item.verification or {}).get("verdict")
+                        or ("confirmed" if item.exists else "rejected")
+                    ) == verdict
+                )
+                for verdict in ("confirmed", "uncertain", "rejected")
+            },
+            "platforms": [p.to_dict() for p in platforms_source],
             "emails": [
                 {
                     "email": e.email,
@@ -163,6 +284,10 @@ class ScanResult:
             },
             "variations_checked": self.variations_checked,
             "discovered_usernames": self.discovered_usernames,
+            "identity_candidates": [
+                candidate.to_dict() if hasattr(candidate, "to_dict") else candidate
+                for candidate in self.identity_candidates
+            ],
             "whois_records": self.whois_records,
             "dns_records": self.dns_records,
             "subdomains": self.subdomains,
@@ -245,7 +370,7 @@ class ScanResult:
                 for s in self.recon_subdomains
             ],
             "leaked_secrets": [
-                s.to_dict() if hasattr(s, "to_dict") else s
+                _serialize_secret_finding(s)
                 for s in self.leaked_secrets
             ],
             "exif_reports": [
@@ -283,4 +408,6 @@ class ScanResult:
             "enrichment": self.enrichment,
             "ai_report": self.ai_report,
             "investigator_summary": self.investigator_summary,
+            "diagnostics": self.diagnostics,
         }
+        return redact_secrets(payload)  # type: ignore[return-value]

@@ -211,7 +211,7 @@ async def _ddg_query(
     parser = _DDGHTMLParser()
     try:
         parser.feed(body)
-    except Exception as exc:  # noqa: BLE001 — defensive; HTMLParser rarely raises
+    except Exception as exc:
         log.debug("DDG parse failed for %r: %s", query, exc)
         return []
     return parser.results[:limit]

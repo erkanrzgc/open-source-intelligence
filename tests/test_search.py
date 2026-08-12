@@ -197,3 +197,40 @@ def test_search_hit_to_dict(db: Path):
     assert d["username"] == "alice"
     assert d["ts"] == 1000
     assert "snippet" in d
+
+
+def test_search_indexes_current_phone_crypto_and_geo_fields(db: Path):
+    payload = {
+        "username": "alice",
+        "found_count": 0,
+        "schema_version": "2026-08-08",
+        "phone_intel": [{"e164": "+905551112233", "carrier": "ExampleTel"}],
+        "crypto_intel": [{"address": "0xabcdef123456", "network": "ethereum"}],
+        "geo_points": [{"display_name": "Kadikoy Istanbul", "country": "Turkiye"}],
+    }
+    scan_id = save_scan(payload, ts=1000, db_path=db)
+    index_scan(scan_id, payload, db_path=db)
+
+    assert search("ExampleTel", db_path=db)[0].id == scan_id
+    assert search("0xabcdef123456", db_path=db)[0].id == scan_id
+    assert search("Kadikoy", db_path=db)[0].id == scan_id
+
+
+def test_search_indexes_identity_candidates(db: Path):
+    payload = _payload("alice", ["GitHub"])
+    payload["identity_candidates"] = [
+        {
+            "username": "alice_dev",
+            "verdict": "likely_same",
+            "profiles": [
+                {
+                    "platform": "Hugging Face",
+                    "profile_data": {"name": "Alice Example", "bio": "quantum otter"},
+                }
+            ],
+        }
+    ]
+    scan_id = save_scan(payload, ts=1000, db_path=db)
+    index_scan(scan_id, payload, db_path=db)
+    assert search("alice_dev", db_path=db)[0].id == scan_id
+    assert search("quantum", db_path=db)[0].id == scan_id

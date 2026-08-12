@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from core.graph_export import export_dot, render_dot
-from core.models import EmailResult, PlatformResult, ScanResult
+from core.models import EmailResult, IdentityCandidate, PlatformResult, ScanResult
 
 
 def _result() -> ScanResult:
@@ -28,6 +28,14 @@ def _result() -> ScanResult:
     ]
     r.whois_records = [{"domain": "alice.com", "registrar": "R"}]
     r.discovered_usernames = ["alice_dev", "alice"]  # self filtered out
+    r.identity_candidates = [
+        IdentityCandidate(
+            username="alice_dev",
+            handle_similarity=0.9,
+            verdict="likely_same",
+            score=0.8,
+        )
+    ]
     return r
 
 
@@ -40,6 +48,7 @@ def test_render_dot_contains_nodes_and_edges():
     assert "email:a@b.com" in dot
     assert "domain:alice.com" in dot
     assert "alias:alice_dev" in dot
+    assert "likely_same" in dot
     assert dot.rstrip().endswith("}")
 
 

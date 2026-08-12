@@ -1,6 +1,8 @@
 """Deep profile scrapers for platforms with accessible APIs."""
 
+import html
 import re
+from urllib.parse import urlencode, urlparse
 
 from core.http_client import HTTPClient
 
@@ -8,11 +10,15 @@ from core.http_client import HTTPClient
 async def scrape_github(client: HTTPClient, username: str) -> dict:
     status, data, _ = await client.get_json(
         f"https://api.github.com/users/{username}",
-        headers={"Accept": "application/vnd.github.v3+json"},
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
     )
     if status != 200 or not data:
         return {}
     return {
+        "username": data.get("login", ""),
         "name": data.get("name", ""),
         "bio": data.get("bio", ""),
         "location": data.get("location", ""),
@@ -57,7 +63,17 @@ async def scrape_gitlab(client: HTTPClient, username: str) -> dict:
     )
     if status != 200 or not data or not isinstance(data, list) or len(data) == 0:
         return {}
-    user = data[0]
+    user = next(
+        (
+            row
+            for row in data
+            if isinstance(row, dict)
+            and str(row.get("username", "")).casefold() == username.casefold()
+        ),
+        None,
+    )
+    if user is None:
+        return {}
     return {
         "name": user.get("name", ""),
         "username": user.get("username", ""),
@@ -74,10 +90,16 @@ async def scrape_gitlab(client: HTTPClient, username: str) -> dict:
 
 
 async def scrape_devto(client: HTTPClient, username: str) -> dict:
+    query = urlencode({"url": username})
     status, data, _ = await client.get_json(
-        f"https://dev.to/api/users/by_username?url={username}"
+        f"https://dev.to/api/users/by_username?{query}",
+        headers={"Accept": "application/vnd.forem.api-v1+json"},
     )
-    if status != 200 or not data:
+    if (
+        status != 200
+        or not isinstance(data, dict)
+        or str(data.get("username", "")).casefold() != username.casefold()
+    ):
         return {}
     return {
         "name": data.get("name", ""),
@@ -90,6 +112,83 @@ async def scrape_devto(client: HTTPClient, username: str) -> dict:
         "website_url": data.get("website_url", ""),
         "profile_image": data.get("profile_image", ""),
     }
+
+
+async def scrape_hugging_face(client: HTTPClient, username: str) -> dict:
+    """Normalize the public Hub user overview and social endpoints."""
+    overview_status, overview, _ = await client.get_json(
+        f"https://huggingface.co/api/users/{username}/overview",
+        headers={"Accept": "application/json"},
+    )
+    if overview_status != 200 or not isinstance(overview, dict):
+        return {}
+
+    socials_status, socials, _ = await client.get_json(
+        f"https://huggingface.co/api/users/{username}/socials",
+        headers={"Accept": "application/json"},
+    )
+    social_handles: dict[str, str] = {}
+    if socials_status == 200 and isinstance(socials, dict):
+        raw_handles = socials.get("socialHandles") or {}
+        if isinstance(raw_handles, dict):
+            social_handles = {
+                str(service).casefold(): value.strip().lstrip("@")
+                for service, value in raw_handles.items()
+                if isinstance(value, str) and value.strip()
+            }
+
+    organizations: list[str] = []
+    for organization in overview.get("orgs") or []:
+        if isinstance(organization, str) and organization.strip():
+            organizations.append(organization.strip())
+        elif isinstance(organization, dict):
+            value = (
+                organization.get("fullname")
+                or organization.get("name")
+                or organization.get("user")
+            )
+            if isinstance(value, str) and value.strip():
+                organizations.append(value.strip())
+
+    return {
+        "username": overview.get("user", ""),
+        "name": overview.get("fullname", ""),
+        "bio": overview.get("details", ""),
+        "avatar_url": overview.get("avatarUrl", ""),
+        "organizations": organizations,
+        "social_handles": social_handles,
+        "twitter_username": social_handles.get("twitter", ""),
+        "github_username": social_handles.get("github", ""),
+        "linkedin_username": social_handles.get("linkedin", ""),
+        "followers": overview.get("numFollowers", 0),
+        "following": overview.get("numFollowing", 0),
+        "models": overview.get("numModels", 0),
+        "datasets": overview.get("numDatasets", 0),
+        "spaces": overview.get("numSpaces", 0),
+        "created_at": overview.get("createdAt", ""),
+    }
+
+
+async def scrape_medium(client: HTTPClient, username: str) -> dict:
+    """Validate Medium's documented profile RSS against its canonical link."""
+    status, body, _ = await client.get(f"https://medium.com/feed/@{username}")
+    if status != 200 or not body:
+        return {}
+
+    raw_links = re.findall(
+        r"<link(?:\s[^>]*)?>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</link>",
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    expected_path = f"/@{username}".casefold()
+    for raw_link in raw_links:
+        candidate = html.unescape(raw_link.strip())
+        parsed = urlparse(candidate)
+        if parsed.netloc.casefold() in {"medium.com", "www.medium.com"} and (
+            parsed.path.rstrip("/").casefold() == expected_path
+        ):
+            return {"username": username, "canonical_url": candidate}
+    return {}
 
 
 async def scrape_hackernews(client: HTTPClient, username: str) -> dict:
@@ -216,38 +315,6 @@ async def scrape_keybase(client: HTTPClient, username: str) -> dict:
         "bio": profile.get("bio", ""),
         "location": profile.get("location", ""),
         "proofs": proof_list,
-    }
-
-
-async def scrape_instagram(client: HTTPClient, username: str) -> dict:
-    headers = {
-        "X-IG-App-ID": "936619743392459",
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 11; SM-G991U) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
-        ),
-    }
-    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
-    status, data, _ = await client.get_json(url, headers=headers)
-    if status != 200 or not data:
-        return {}
-    user = data.get("data", {}).get("user", {})
-    if not user:
-        return {}
-    return {
-        "name": user.get("full_name", ""),
-        "username": user.get("username", ""),
-        "bio": user.get("biography", ""),
-        "external_url": user.get("external_url", ""),
-        "followers": user.get("edge_followed_by", {}).get("count", 0),
-        "following": user.get("edge_follow", {}).get("count", 0),
-        "is_verified": user.get("is_verified", False),
-        "is_private": user.get("is_private", False),
-        "is_business": user.get("is_business_account", False),
-        "category": user.get("category_name", ""),
-        "avatar_url": user.get("profile_pic_url_hd", "") or user.get("profile_pic_url", ""),
-        "media_count": user.get("edge_owner_to_timeline_media", {}).get("count", 0),
-        "id": user.get("id", ""),
     }
 
 
@@ -378,16 +445,15 @@ async def scrape_npm(client: HTTPClient, username: str) -> dict:
 
 DEEP_SCRAPERS = {
     "GitHub": scrape_github,
-    "Reddit": scrape_reddit,
     "GitLab": scrape_gitlab,
     "Dev.to": scrape_devto,
+    "Hugging Face": scrape_hugging_face,
+    "Medium": scrape_medium,
     "Hacker News": scrape_hackernews,
     "Chess.com": scrape_chess_com,
     "Lichess": scrape_lichess,
     "Steam": scrape_steam,
     "Keybase": scrape_keybase,
-    "Instagram": scrape_instagram,
-    "X": scrape_twitter,
     "TikTok": scrape_tiktok,
     "YouTube": scrape_youtube,
     "npm": scrape_npm,

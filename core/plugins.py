@@ -23,9 +23,9 @@ dump results into its own store looks like::
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable
 
 from core.config import ScanConfig
 from core.logging_setup import get_logger
@@ -46,12 +46,17 @@ class PluginRegistry:
         """Register a function to run after every scan completes."""
         self._post_scan.append(hook)
 
-    def run_post_scan(self, result: ScanResult, cfg: ScanConfig) -> None:
+    def run_post_scan(self, result: ScanResult, cfg: ScanConfig) -> dict[str, int]:
+        completed = 0
+        failed = 0
         for hook in self._post_scan:
             try:
                 hook(result, cfg)
-            except Exception as exc:  # noqa: BLE001 — plugins must not crash the host
+                completed += 1
+            except Exception as exc:
+                failed += 1
                 log.warning("plugin post_scan hook failed: %s", exc)
+        return {"hooks": len(self._post_scan), "completed": completed, "failed": failed}
 
     @property
     def post_scan_hooks(self) -> list[PostScanHook]:
@@ -92,7 +97,7 @@ def load_plugins(
                 continue
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("plugin load failed for %s: %s", path, exc)
             continue
 
@@ -102,6 +107,6 @@ def load_plugins(
             continue
         try:
             register(registry)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("plugin %s register() failed: %s", path.name, exc)
     return registry

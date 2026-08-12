@@ -4,7 +4,13 @@ import aiohttp
 import pytest
 from aioresponses import aioresponses
 
-from core.http_client import HTTPClient
+from core.http_client import HTTPClient, _safe_log_url
+
+
+def test_log_url_redacts_query_secrets_and_fragment():
+    assert _safe_log_url(
+        "https://api.example/x?key=super-secret&username=alice#fragment"
+    ) == "https://api.example/x?[redacted]"
 
 
 @pytest.mark.asyncio
@@ -13,6 +19,7 @@ async def test_get_success():
         m.get("https://example.com/u", status=200, body="<html>hi</html>")
         async with HTTPClient() as client:
             status, body, _ = await client.get("https://example.com/u")
+            assert client.request_count == 1
         assert status == 200
         assert "hi" in body
 
@@ -44,6 +51,29 @@ async def test_get_json_error_status():
             status, data, _ = await client.get_json("https://api.example.com/x")
         assert status == 500
         assert data is None
+
+
+@pytest.mark.asyncio
+async def test_post_form_success_uses_central_transport_and_counts_request():
+    with aioresponses() as mocked:
+        mocked.post(
+            "https://auth.example.com/token",
+            status=200,
+            payload={
+                "access_token": "short-lived",
+                "token_type": "bearer",
+                "expires_in": 3600,
+            },
+        )
+        async with HTTPClient() as client:
+            status, data, _ = await client.post_form(
+                "https://auth.example.com/token",
+                {"grant_type": "client_credentials"},
+            )
+            assert client.request_count == 1
+
+    assert status == 200
+    assert data is not None and data["access_token"] == "short-lived"
 
 
 @pytest.mark.asyncio

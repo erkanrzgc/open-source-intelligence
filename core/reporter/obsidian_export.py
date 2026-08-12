@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
 from core.models import ScanResult
 
 _BAD_FILENAME = re.compile(r"[^A-Za-z0-9._@+\-]+")

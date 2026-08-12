@@ -32,7 +32,6 @@ try:  # pragma: no cover - import guard
     import httpx
     from ghunt.apis.peoplepa import PeoplePaHttp
     from ghunt.helpers import auth as _ghunt_auth
-    from ghunt.objects.base import GHuntCreds
 
     _AVAILABLE = True
 except Exception as exc:  # pragma: no cover - import guard

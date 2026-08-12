@@ -29,9 +29,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS scans_fts USING fts5(
     username,
     document
 );
+CREATE TABLE IF NOT EXISTS search_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 _MAX_DOC_CHARS = 32_000
+_INDEX_SCHEMA_VERSION = "3"
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,31 @@ def _flatten_payload(payload: dict) -> str:
                 if isinstance(value, str) and value.strip():
                     parts.append(value.strip())
 
+    for candidate in payload.get("identity_candidates", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        alias = candidate.get("username")
+        if isinstance(alias, str) and alias.strip():
+            parts.append(alias.strip())
+        verdict = candidate.get("verdict")
+        if isinstance(verdict, str):
+            parts.append(verdict)
+        for profile in candidate.get("profiles", []) or []:
+            if not isinstance(profile, dict):
+                continue
+            platform_name = profile.get("platform")
+            if isinstance(platform_name, str):
+                parts.append(platform_name)
+            data = profile.get("profile_data") or {}
+            if isinstance(data, dict):
+                for key in (
+                    "name", "full_name", "fullname", "display_name", "bio",
+                    "details", "description", "location", "organization",
+                ):
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value.strip())
+
     for email in payload.get("emails", []) or []:
         if isinstance(email, str):
             parts.append(email)
@@ -99,27 +129,39 @@ def _flatten_payload(payload: dict) -> str:
             if isinstance(addr, str):
                 parts.append(addr)
 
-    for phone in payload.get("phones", []) or []:
+    for phone in [
+        *(payload.get("phone_intel", []) or []),
+        *(payload.get("phones", []) or []),
+    ]:
         if isinstance(phone, str):
             parts.append(phone)
         elif isinstance(phone, dict):
-            number = phone.get("number") or phone.get("e164")
-            if isinstance(number, str):
-                parts.append(number)
+            for key in ("number", "e164", "raw", "country", "carrier", "location"):
+                value = phone.get(key)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
 
-    for wallet in payload.get("crypto", []) or []:
+    for wallet in [
+        *(payload.get("crypto_intel", []) or []),
+        *(payload.get("crypto", []) or []),
+    ]:
         if isinstance(wallet, str):
             parts.append(wallet)
         elif isinstance(wallet, dict):
-            addr = wallet.get("address")
-            if isinstance(addr, str):
-                parts.append(addr)
+            for key in ("address", "network", "currency"):
+                value = wallet.get(key)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
 
-    for geo in payload.get("geo", []) or []:
+    for geo in [
+        *(payload.get("geo_points", []) or []),
+        *(payload.get("geo", []) or []),
+    ]:
         if isinstance(geo, dict):
-            label = geo.get("label") or geo.get("location")
-            if isinstance(label, str):
-                parts.append(label)
+            for key in ("display_name", "label", "location", "query", "country"):
+                value = geo.get(key)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
 
     doc = " \n".join(parts)
     if len(doc) > _MAX_DOC_CHARS:
@@ -151,6 +193,10 @@ def index_scan(
             "INSERT INTO scans_fts(rowid, username, document) VALUES (?, ?, ?)",
             (scan_id, username, document),
         )
+        conn.execute(
+            "INSERT OR REPLACE INTO search_meta(key, value) VALUES ('schema_version', ?)",
+            (_INDEX_SCHEMA_VERSION,),
+        )
         conn.commit()
     except sqlite3.Error as exc:
         log.warning("search: index upsert failed for id=%s: %s", scan_id, exc)
@@ -178,7 +224,19 @@ def _rebuild_on(conn: sqlite3.Connection) -> int:
         )
         count += 1
     conn.commit()
+    conn.execute(
+        "INSERT OR REPLACE INTO search_meta(key, value) VALUES ('schema_version', ?)",
+        (_INDEX_SCHEMA_VERSION,),
+    )
+    conn.commit()
     return count
+
+
+def _index_schema_is_current(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT value FROM search_meta WHERE key = 'schema_version'"
+    ).fetchone()
+    return bool(row and row[0] == _INDEX_SCHEMA_VERSION)
 
 
 def reindex(*, db_path: Path = DEFAULT_DB_PATH) -> int:
@@ -252,7 +310,7 @@ def search(
         history_rows = _history_row_count(conn)
         if history_rows == 0:
             return []
-        if _index_row_count(conn) < history_rows:
+        if not _index_schema_is_current(conn) or _index_row_count(conn) < history_rows:
             _rebuild_on(conn)
 
         sql = (

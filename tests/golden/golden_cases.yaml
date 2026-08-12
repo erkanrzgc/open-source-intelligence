@@ -25,6 +25,7 @@
 
 cases:
   - case_name: real_profile_high_confidence
+    label: positive
     username: erkanrzgic
     platform_name: ExampleSocialReal
     platform_url: "https://example.social/{username}"
@@ -48,8 +49,10 @@ cases:
       signals_include:
         - title
         - canonical
+      verdict: confirmed
 
   - case_name: soft_404_redirect_to_explore
+    label: negative
     username: ghost_user
     platform_name: ExampleSiteRedirect
     platform_url: "https://example.com/{username}"
@@ -63,8 +66,10 @@ cases:
       status_contains: soft_404
       signals_include:
         - redirect_off_target
+      verdict: rejected
 
   - case_name: empty_shell_low_confidence
+    label: negative
     username: lonely
     platform_name: ExampleShellSite
     platform_url: "https://shell.example/{username}"
@@ -82,8 +87,10 @@ cases:
       status_contains: username_not_in_body
       signals_include:
         - username_absent
+      verdict: rejected
 
   - case_name: content_absent_user_not_found
+    label: negative
     username: ghostuser
     platform_name: ExampleAbsentSite
     platform_url: "https://absent.example/{username}"
@@ -95,3 +102,34 @@ cases:
     expect:
       exists: false
       status_contains: not_found
+      verdict: rejected
+
+  - case_name: login_wall_with_username
+    label: negative
+    username: alice
+    platform_name: LoginWall
+    platform_url: "https://login.example/{username}"
+    check_type: status
+    response:
+      status: 200
+      body: "<html><body><h1>alice</h1><p>Log in to view this profile</p></body></html>"
+    expect:
+      exists: false
+      status_contains: unavailable_auth
+      signals_include:
+        - login_required
+      verdict: uncertain
+
+  - case_name: reused_handle_empty_profile
+    label: negative
+    username: alice
+    platform_name: ReusedHandle
+    platform_url: "https://reuse.example/{username}"
+    check_type: status
+    response:
+      status: 200
+      body: "<html><body><h1>alice</h1><p>This profile has no public content yet.</p></body></html>"
+    expect:
+      exists: false
+      confidence_at_most: 0.10
+      verdict: uncertain

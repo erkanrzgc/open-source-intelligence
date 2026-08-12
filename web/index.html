@@ -23,9 +23,18 @@
       <form id="scan-form">
         <div class="row">
           <label>username<input name="username" required placeholder="alice" /></label>
-          <label>categories<input name="categories" placeholder="social,dev (optional)" /></label>
+          <label>platform scope
+            <select name="platform_scope">
+              <option value="core">Core (100)</option>
+              <option value="full">Full (up to 500)</option>
+            </select>
+          </label>
+          <label>categories
+            <select id="category-select" name="categories" multiple size="4" aria-label="Platform categories"></select>
+          </label>
         </div>
         <div class="checkbox-grid">
+          <label><input type="checkbox" name="smart" checked /> similar usernames</label>
           <label><input type="checkbox" name="email" /> email</label>
           <label><input type="checkbox" name="breach" /> breach</label>
           <label><input type="checkbox" name="web" /> web</label>
@@ -46,6 +55,9 @@
         <button type="submit">Scan</button>
       </form>
       <div id="scan-status"></div>
+      <div id="verification-status"></div>
+      <div id="identity-candidates"></div>
+      <ul id="phase-warnings"></ul>
       <div id="scan-progress">
         <div id="scan-progress-bar"></div>
       </div>

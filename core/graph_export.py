@@ -60,7 +60,12 @@ def render_dot(result: Any) -> str:
         if node_id in seen:
             continue
         seen.add(node_id)
-        color = "crimson" if isinstance(email.get("breach_count"), (int, float)) and email.get("breach_count", 0) > 0 else "forestgreen"
+        color = (
+            "crimson"
+            if isinstance(email.get("breach_count"), int | float)
+            and email.get("breach_count", 0) > 0
+            else "forestgreen"
+        )
         lines.append(_node(node_id, addr, "ellipse", color))
         lines.append(
             f'  "user:{_escape(username)}" -> "{_escape(node_id)}" [label="email"];'
@@ -79,14 +84,32 @@ def render_dot(result: Any) -> str:
             f'  "user:{_escape(username)}" -> "{_escape(node_id)}" [label="domain"];'
         )
 
-    for other in payload.get("discovered_usernames", []):
+    candidate_rows = payload.get("identity_candidates", []) or []
+    candidate_names: set[str] = set()
+    for row in candidate_rows:
+        if not isinstance(row, dict):
+            continue
+        candidate_name = row.get("username")
+        if isinstance(candidate_name, str):
+            candidate_names.add(candidate_name)
+    for other in [*sorted(candidate_names), *(payload.get("discovered_usernames", []) or [])]:
         if not isinstance(other, str) or other == username:
             continue
         node_id = f"alias:{other}"
         if node_id in seen:
             continue
         seen.add(node_id)
-        lines.append(_node(node_id, other, "box", "gray"))
+        candidate = next(
+            (
+                row for row in candidate_rows
+                if isinstance(row, dict) and row.get("username") == other
+            ),
+            {},
+        )
+        label = other
+        if candidate:
+            label += f"\n{candidate.get('verdict', 'uncertain')} ({candidate.get('score', 0)})"
+        lines.append(_node(node_id, label, "box", "gray"))
         lines.append(
             f'  "user:{_escape(username)}" -> "{_escape(node_id)}" [label="alias", style=dashed];'
         )

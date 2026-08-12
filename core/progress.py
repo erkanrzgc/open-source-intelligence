@@ -20,7 +20,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-_current: ContextVar["ProgressEmitter | None"] = ContextVar(
+_current: ContextVar[ProgressEmitter | None] = ContextVar(
     "osint_progress", default=None
 )
 

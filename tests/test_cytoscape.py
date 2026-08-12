@@ -53,3 +53,17 @@ def test_phone_and_crypto_nodes():
     ids = {n["data"]["id"] for n in out["nodes"]}
     assert "phone::+15551234" in ids
     assert "crypto::0xabc" in ids
+
+
+def test_identity_candidate_alias_node():
+    out = payload_to_cytoscape(
+        {
+            "username": "alice",
+            "identity_candidates": [
+                {"username": "alice_dev", "verdict": "likely_same", "score": 0.8}
+            ],
+        }
+    )
+    alias = next(node for node in out["nodes"] if node["data"]["id"] == "alias::alice_dev")
+    assert alias["data"]["verdict"] == "likely_same"
+    assert any(edge["data"]["relation"] == "identity_candidate" for edge in out["edges"])

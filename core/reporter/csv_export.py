@@ -39,7 +39,7 @@ def _fmt(val: Any) -> str:
         return ""
     if isinstance(val, bool):
         return "true" if val else "false"
-    if isinstance(val, (list, tuple, set, frozenset)):
+    if isinstance(val, list | tuple | set | frozenset):
         return "; ".join(_fmt(v) for v in val)
     if isinstance(val, dict):
         return "; ".join(f"{k}={_fmt(v)}" for k, v in val.items())

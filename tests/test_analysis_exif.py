@@ -13,7 +13,6 @@ from modules.analysis import exif
 from modules.analysis.exif import _dms_to_decimal, parse_exif_dict
 from modules.analysis.models import ExifReport
 
-
 # ── DMS → decimal ───────────────────────────────────────────────────
 
 
@@ -125,7 +124,7 @@ def test_parse_exif_keeps_unrecognized_tags_in_raw() -> None:
     assert report.raw_tags  # non-empty
     # Bytes values are decoded best-effort
     for v in report.raw_tags.values():
-        assert isinstance(v, (str, int, float))
+        assert isinstance(v, str | int | float)
 
 
 def test_parse_exif_drops_empty_string_values() -> None:

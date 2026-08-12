@@ -16,12 +16,15 @@ ai_required: false  # individual phases may opt into LLM via core/analysis/skill
 ```
 core/
 ├── engine.py               # phases + orchestrator (run_scan)
+├── context.py              # per-scan cache, LLM budget, progress and tasks
 ├── config.py               # ScanConfig + env overrides
 ├── models.py               # PlatformResult, ScanResult, dataclasses
+├── verification.py         # deterministic confirmed/uncertain/rejected verdicts
+├── security.py             # URL/path validation and output redaction
 ├── http_client.py          # async HTTP with retry, proxy, rate limit
-├── platform_loader.py      # parses modules/platforms.yaml
+├── platform_loader.py      # deterministic 100-core / 500-full catalogue
 ├── cross_reference.py      # name/location/linked-account identity scoring
-├── smart_search.py         # username variation generator
+├── smart_search.py         # ranked alias candidate generator
 ├── plugins.py              # third-party plugin loader
 ├── progress.py             # event emitter for live UI
 ├── reporter/               # CSV, HTML, JSON, PDF, STIX, MISP
@@ -42,6 +45,12 @@ core/
 ## ScanConfig — the single source of truth
 
 Every scan setting is a field on the frozen `ScanConfig` dataclass.
+The default scope is the 100-platform core catalogue and smart alias
+discovery is enabled. `platform_scope="full"` selects at most 500;
+alias fan-out is capped by `alias_max_candidates` and `alias_platform_limit`.
+The default adaptive strategy probes 12 candidates on 15 platforms, then
+tries candidates 13–24 on 5 platforms only when the first tier has no strong
+identity verdict (maximum 240 alias probes).
 Adding a new scan-time setting means:
 
 1. Add the field with a sensible default.
@@ -63,6 +72,21 @@ of `result.to_dict()`. New result fields require:
 3. Reporter / API / CSV writers pick up the new key automatically if
    they iterate generically; otherwise add per-reporter rendering.
 
+Alias profiles are never appended to root `platforms`; they live under
+`identity_candidates` with deterministic verdict, score and evidence.
+
+Supported official endpoints are implemented under `modules/providers/`.
+`ScanContext.create()` loads provider credentials once; secrets never enter
+`ScanConfig` or results. X and Twitch batch all configured alias candidates,
+while diagnostics report logical probes separately from real HTTP requests.
+
+`PlatformResult.probe_outcome` is a typed `ProbeOutcome`, separate from the
+legacy `exists` boolean. Every evaluated row also records its evidence class,
+entity scope, contract revision, requested/canonical handles, and whether the
+provider contract was actually verified. Only an exact canonical match from a
+confirmation-capable checked-in contract can set `exists=True`; a URL probe or
+non-empty deep parser result alone remains ambiguous.
+
 ## HTTPClient contract
 
 ```
@@ -79,24 +103,23 @@ soft-404 detection in `engine._check_platform`.
 
 ## Failure modes
 
-* Engine phases never raise. They catch broadly and log at debug/warning.
+* The phase runner records ordinary failures in `ScanResult.diagnostics` and
+  continues; `asyncio.CancelledError` always propagates.
 * HTTPClient retries `RETRY_COUNT` times; on final failure returns
   `(0, "", elapsed)` for timeout or `(-1, "", elapsed)` for errors.
+* Missing provider credentials, rate limits, policy-disabled automation and
+  login walls are coverage-loss outcomes, never account absence.
 * SimHash / FP scoring failures don't propagate — the match is left in
   place with default confidence.
 
 ## Adding a new phase
 
 ```python
-async def _phase_my_thing(client: HTTPClient, cfg: ScanConfig, result: ScanResult) -> None:
-    if not cfg.my_thing_enabled:
-        return
-    try:
-        # do work, mutate result.* fields
-        ...
-    except Exception as exc:  # noqa: BLE001 — phases must not raise
-        log.debug("my_thing failed: %s", exc)
+async def _phase_my_thing(state: _ScanState) -> None:
+    # do work and mutate state.result
+    ...
 ```
 
-Append the call inside `run_scan()` in the correct order. Emit
-`phase_start` / `phase_end` events so the live UI tracks it.
+Register a `PhaseSpec` in `_phase_registry()` in the correct order, including
+its `enabled` predicate. The central runner owns timing, progress emission,
+failure isolation and diagnostic recording.

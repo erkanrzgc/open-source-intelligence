@@ -28,4 +28,4 @@ def get_platform_count() -> int:
     return len(_ensure_loaded())
 
 
-__all__ = ["PLATFORMS", "Platform", "get_platform_count"]
+__all__ = ["PLATFORMS", "Platform", "get_platform_count"]  # noqa: F822

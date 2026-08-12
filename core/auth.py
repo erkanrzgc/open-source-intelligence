@@ -152,7 +152,8 @@ def create_user(
         raise ValueError(f"user {clean!r} already exists") from exc
     finally:
         conn.close()
-    assert user_id is not None
+    if user_id is None:
+        raise RuntimeError("database did not return a user id")
     return User(
         id=user_id,
         username=clean,
@@ -271,11 +272,11 @@ def decode_token(token: str, *, secret: str) -> dict[str, Any]:
         payload = json.loads(payload_bytes)
     except json.JSONDecodeError as exc:
         raise AuthError("malformed payload") from exc
-    exp = payload.get("exp")
-    if isinstance(exp, (int, float)) and exp < time.time():
-        raise AuthError("token expired")
     if not isinstance(payload, dict):
         raise AuthError("malformed payload")
+    exp = payload.get("exp")
+    if isinstance(exp, int | float) and exp < time.time():
+        raise AuthError("token expired")
     return payload
 
 
@@ -291,7 +292,7 @@ def is_auth_required() -> bool:
     )
 
 
-_EPHEMERAL_SECRET = ""
+_EPHEMERAL_SECRET: str | None = None
 _EPHEMERAL_SECRET_LOCK = threading.Lock()
 
 

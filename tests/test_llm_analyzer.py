@@ -1,9 +1,11 @@
 """Tests for core/analysis/llm.py — stub backend, no real model loaded."""
 
 import json
+from typing import ClassVar
 
 import pytest
 
+from core.analysis import llm as llm_module
 from core.analysis.llm import (
     AIReport,
     Backend,
@@ -25,6 +27,27 @@ class StubBackend:
     ) -> str:
         self.calls.append((system, user))
         return self.response
+
+
+class StubHTTPClient:
+    calls: ClassVar[list[tuple[str, dict, dict | None]]] = []
+
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post_json(self, url, json_body, headers=None):
+        self.calls.append((url, json_body, headers))
+        return (
+            200,
+            {"choices": [{"message": {"content": "shared transport"}}]},
+            0.01,
+        )
 
 
 def _sample_payload() -> dict:
@@ -162,6 +185,24 @@ async def test_analyze_without_backend_raises():
     analyzer = LLMAnalyzer(backend=None)
     with pytest.raises(LLMUnavailable):
         await analyzer.analyze(_sample_payload())
+
+
+async def test_http_backend_uses_shared_http_client(monkeypatch):
+    StubHTTPClient.calls = []
+    monkeypatch.setattr(llm_module, "HTTPClient", StubHTTPClient)
+    backend = llm_module.HttpBackend(
+        "https://llm.example/v1/chat/completions",
+        model="model-a",
+        api_key="secret",
+    )
+
+    response = await backend.complete("system", "user", max_tokens=20, temperature=0.1)
+
+    assert response == "shared transport"
+    url, payload, headers = StubHTTPClient.calls[0]
+    assert url == "https://llm.example/v1/chat/completions"
+    assert payload["model"] == "model-a"
+    assert headers["Authorization"] == "Bearer secret"
 
 
 async def test_analyze_backend_bad_json_propagates():

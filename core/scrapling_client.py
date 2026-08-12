@@ -21,12 +21,14 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+AsyncFetcher: Any
 try:
-    from scrapling import AsyncFetcher
+    from scrapling import AsyncFetcher as _AsyncFetcher
 
+    AsyncFetcher = _AsyncFetcher
     SCRAPLING_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    AsyncFetcher = None  # type: ignore[assignment]
+    AsyncFetcher = None
     SCRAPLING_AVAILABLE = False
 
 

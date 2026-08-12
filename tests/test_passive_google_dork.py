@@ -17,8 +17,7 @@ from aioresponses import aioresponses
 
 from core.http_client import HTTPClient
 from modules.passive import google_dork
-from modules.passive.google_dork import _expand_presets, _build_dorks
-
+from modules.passive.google_dork import _build_dorks, _expand_presets
 
 # ── Dork expansion (pure functions) ─────────────────────────────────
 

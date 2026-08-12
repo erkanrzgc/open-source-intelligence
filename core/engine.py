@@ -8,24 +8,39 @@ and wiring it into scan().
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import time
-from dataclasses import replace
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from core.config import ScanConfig
+from core.context import ScanContext
+from core.correlation import correlate_identity
 from core.cross_reference import cross_reference
 from core.http_client import HTTPClient
 from core.logging_setup import get_logger
-from core.models import EmailResult, PhotoMatch, PlatformResult, ScanResult
+from core.models import (
+    EmailResult,
+    IdentityCandidate,
+    PhotoMatch,
+    PlatformResult,
+    ProbeOutcome,
+    ScanResult,
+)
+from core.platform_loader import ALIAS_PROBE_PLATFORMS, supports_confirmation
 from core.progress import emit as _emit
 from core.reporter import console
 from core.smart_search import (
+    UsernameCandidate,
     extract_discoverable_data,
-    generate_variations,
+    generate_candidates,
     merge_discoveries,
 )
+from core.verification import evaluate_platform
 from modules.breach_check import breach_check_available, check_many_emails, hibp_available
 from modules.comb_leaks import search_comb_many
 from modules.deep_scrapers import DEEP_SCRAPERS
@@ -42,19 +57,26 @@ from modules.platforms import PLATFORMS, Platform
 from modules.profile_extract import extract_profile
 from modules.profile_extract import is_available as _extract_available
 from modules.profile_liveness import score_liveness
+from modules.providers import (
+    PROVIDERS,
+    has_provider,
+    prepare_provider_credentials,
+)
+from modules.providers import is_configured as provider_is_configured
+from modules.providers import lookup_many as lookup_provider_many
 from modules.stealth import obscura_fallback
 from modules.stealth.js_wall import looks_like_js_wall
-from modules.stealth.soft_404 import (
-    IMPOSSIBLE_USERNAME,
-    Soft404Cache,
-    is_soft_404,
-    make_baseline,
-)
 from modules.stealth.playwright_fallback import (
     AVAILABLE as PLAYWRIGHT_AVAILABLE,
 )
 from modules.stealth.playwright_fallback import (
     fetch_rendered,
+)
+from modules.stealth.soft_404 import (
+    IMPOSSIBLE_USERNAME,
+    Soft404Cache,
+    is_soft_404,
+    make_baseline,
 )
 from modules.toutatis_lookup import is_available as toutatis_available
 from modules.toutatis_lookup import lookup_usernames as toutatis_lookup_usernames
@@ -77,6 +99,25 @@ def _soft_404_cache() -> Soft404Cache:
     return _SOFT_404_CACHE
 
 
+def _providers_requiring_token_prep(
+    cfg: ScanConfig,
+    selected_by_name: dict[str, Platform],
+) -> tuple[str, ...]:
+    """Return OAuth providers that this scan can actually query."""
+    required = {
+        name
+        for name in ("Reddit", "Twitch")
+        if name in selected_by_name
+    }
+    if cfg.smart:
+        required.update(
+            name
+            for name in ALIAS_PROBE_PLATFORMS[: cfg.alias_platform_limit]
+            if name in {"Reddit", "Twitch"}
+        )
+    return tuple(sorted(required))
+
+
 # Pending baseline-seed background tasks; awaited at end of run_scan so the
 # scan completes deterministically without leaking warnings about unawaited
 # coroutines.
@@ -86,19 +127,6 @@ _PENDING_SEED_TASKS: set[asyncio.Task] = set()
 def _track_seed(task: asyncio.Task) -> None:
     _PENDING_SEED_TASKS.add(task)
     task.add_done_callback(_PENDING_SEED_TASKS.discard)
-IMPORTANT_PLATFORMS_FOR_VARIATIONS = frozenset(
-    {
-        "GitHub",
-        "X",
-        "Instagram",
-        "Reddit",
-        "LinkedIn",
-        "YouTube",
-        "TikTok",
-        "Steam",
-    }
-)
-
 _LOGIN_WALL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"\b(?:log\s*in|login|sign\s*in|signin)\b.{0,80}"
@@ -126,8 +154,9 @@ def _should_render(platform: Platform, cfg: ScanConfig) -> bool:
         return False
     if platform.check_type == "json_api":
         return False
-    # Forced global opt-in (cfg.playwright) OR platform flagged as js_heavy.
-    return bool(cfg.playwright or platform.js_heavy)
+    # Explicit rendering always wins. Automatic rendering for catalogued
+    # JS-heavy sites can be disabled for deterministic/offline operation.
+    return bool(cfg.playwright or (platform.js_heavy and not cfg.no_auto_render))
 
 
 def _selected_browser_available(cfg: ScanConfig) -> bool:
@@ -187,6 +216,29 @@ def _any_presence_match(body: str, strings: tuple[str, ...]) -> bool:
     return any(s in body for s in strings)
 
 
+def _canonical_username_from_payload(data: object, expected: str) -> str | None:
+    """Extract the provider's canonical handle from a small API payload.
+
+    Search/list endpoints are deliberately not treated as exact simply because
+    they returned a row: an exact case-insensitive handle match is preferred,
+    and a different first row is retained so the contract gate can reject it.
+    """
+    rows = data if isinstance(data, list) else [data]
+    candidates: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in ("username", "login", "user", "handle", "uniqueId"):
+            value = row.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip().lstrip("@"))
+                break
+    return next(
+        (value for value in candidates if value.casefold() == expected.casefold()),
+        candidates[0] if candidates else None,
+    )
+
+
 _PATTERN_CACHE: dict[str, re.Pattern[str] | None] = {}
 """Compiled regex cache for platform username_pattern fields. None = tried and failed."""
 
@@ -213,19 +265,48 @@ def _username_matches_platform(username: str, platform: Platform) -> bool:
 
 
 async def _check_platform(
-    client: HTTPClient, cfg: ScanConfig, platform: Platform
+    client: HTTPClient,
+    cfg: ScanConfig,
+    platform: Platform,
+    context: ScanContext | None = None,
 ) -> PlatformResult:
+    if context is None:
+        # Backwards-compatible direct helper calls share the legacy test cache;
+        # run_scan always supplies a fresh context.
+        context = ScanContext(
+            negative_cache=_NEGATIVE_CACHE,
+            soft_404_cache=_soft_404_cache(),
+        )
     username = cfg.username
     url = platform.url.replace("{username}", username)
-    result = PlatformResult(platform=platform.name, url=url, category=platform.category)
+    result = PlatformResult(
+        platform=platform.name,
+        url=url,
+        category=platform.category,
+        queried_username=username,
+        evidence_class=platform.evidence_class,
+        entity_scope=platform.entity_scope,
+        contract_revision=platform.contract_revision,
+        confirmation_capable=supports_confirmation(platform),
+    )
     login_required = False
+
+    if not platform.automated:
+        if platform.auth_mode == "required":
+            result.status = "unavailable_auth"
+            result.probe_outcome = ProbeOutcome.UNAVAILABLE_AUTH
+        else:
+            result.status = "unavailable_policy"
+            result.probe_outcome = ProbeOutcome.UNAVAILABLE_POLICY
+        result.fp_signals = ["automated_lookup_disabled"]
+        return result
 
     if cfg.skip_invalid_usernames:
         if not _username_matches_platform(username, platform):
             result.status = "invalid_username"
             result.fp_signals = ["username_pattern_mismatch"]
             return result
-        if _is_known_not_found(username, platform.name):
+        if _is_known_not_found(username, platform.name, context=context):
             result.status = "cached_not_found"
             result.fp_signals = ["negative_cache_hit"]
             return result
@@ -243,6 +324,11 @@ async def _check_platform(
             result.http_status = status
             result.response_time = elapsed
             result.exists = status == 200 and data is not None
+            result.canonical_username = _canonical_username_from_payload(data, username)
+            result.contract_verified = bool(
+                result.canonical_username
+                and result.canonical_username.casefold() == username.casefold()
+            )
             if result.exists and data is not None and (platform.absence_strings or platform.presence_strings):
                 _data_text = _json.dumps(data, separators=(",", ":"))
                 absent = _any_absence_match(_data_text, platform.absence_strings)
@@ -276,13 +362,27 @@ async def _check_platform(
                     result.http_status = _probe_status
                     result.response_time = _probe_elapsed
                     result.exists = False
-                    result.status = "not_found"
+                    if _probe_status in (401, 403):
+                        result.status = "unavailable_auth"
+                    elif _probe_status == 429:
+                        result.status = "blocked"
+                    elif _probe_status in (-1, 0) or _probe_status >= 500:
+                        result.status = "error"
+                    else:
+                        result.status = "not_found"
                     return result
+                result.canonical_username = _canonical_username_from_payload(
+                    _probe_data, username
+                )
+                result.contract_verified = bool(
+                    result.canonical_username
+                    and result.canonical_username.casefold() == username.casefold()
+                )
                 if _probe_data is not None and platform.absence_strings:
                     import json as _json
                     _probe_text = _json.dumps(
                         _probe_data, separators=(",", ":"), ensure_ascii=False
-                    ) if isinstance(_probe_data, (dict, list)) else str(_probe_data)
+                    ) if isinstance(_probe_data, dict | list) else str(_probe_data)
                     if _any_absence_match(_probe_text, platform.absence_strings):
                         result.http_status = _probe_status
                         result.response_time = _probe_elapsed
@@ -447,7 +547,7 @@ async def _check_platform(
             # Lazily seeds the baseline (fire-and-forget) when first encountering
             # a status-only platform with no cached fingerprint.
             if result.exists and body and platform.check_type == "status":
-                cache = _soft_404_cache()
+                cache = context.soft_404_cache
                 baseline = cache.get(platform.name)
                 if baseline is not None:
                     soft, reason = is_soft_404(
@@ -464,9 +564,9 @@ async def _check_platform(
                             result.fp_signals = list(result.fp_signals) + [reason]
                 else:
                     # Kick off a background probe so the next scan benefits.
-                    _track_seed(
+                    context.track_seed(
                         asyncio.create_task(
-                            _seed_soft_404_baseline(client, platform)
+                            _seed_soft_404_baseline(client, platform, context=context)
                         )
                     )
 
@@ -512,10 +612,9 @@ async def _check_platform(
                         else:
                             fp = score_match(
                                 username=username,
-                                platform_name=platform.name,
-                                status=status,
                                 body=body,
                                 check_type=platform.check_type,
+                                http_status=status,
                             )
                             result.confidence = fp.confidence
                             result.fp_signals = list(result.fp_signals) + ["pw_rescore"] + list(fp.signals)
@@ -534,7 +633,9 @@ async def _check_platform(
 
         if result.status == "pending":
             result.status = (
-                "login_required" if login_required else _status_from_http(status, result.exists)
+                "unavailable_auth"
+                if login_required
+                else _status_from_http(status, result.exists)
             )
     except (asyncio.TimeoutError, OSError) as exc:
         log.debug("platform %s errored: %s", platform.name, exc)
@@ -544,12 +645,58 @@ async def _check_platform(
         result.status = "error"
 
     if not result.exists and result.status not in ("error",):
-        _mark_not_found(username, platform.name)
+        _mark_not_found(username, platform.name, context=context)
 
     return result
 
 
-async def _seed_soft_404_baseline(client: HTTPClient, platform: Platform) -> None:
+async def _check_platform_for_context(
+    client: HTTPClient,
+    cfg: ScanConfig,
+    platform: Platform,
+    context: ScanContext | None,
+) -> PlatformResult:
+    """Keep monkeypatched/legacy three-argument checkers compatible."""
+    if context is not None and has_provider(platform.name):
+        try:
+            batch = await lookup_provider_many(
+                client,
+                platform.name,
+                [cfg.username],
+                context.provider_credentials,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "provider %s lookup failed (%s)",
+                platform.name,
+                type(exc).__name__,
+            )
+            return PlatformResult(
+                platform=platform.name,
+                url=platform.url.replace("{username}", cfg.username),
+                category=platform.category,
+                status="error",
+                queried_username=cfg.username,
+                fp_signals=["provider_adapter_error"],
+            )
+        if batch is not None:
+            context.provider_http_requests += batch.http_request_count
+            observation = batch.observations.get(cfg.username)
+            if observation is not None:
+                return observation.to_platform_result(platform)
+    if context is None:
+        return await _check_platform(client, cfg, platform)
+    return await _check_platform(client, cfg, platform, context=context)
+
+
+async def _seed_soft_404_baseline(
+    client: HTTPClient,
+    platform: Platform,
+    *,
+    context: ScanContext | None = None,
+) -> None:
     """Fire-and-forget probe to populate the soft-404 baseline cache.
 
     Fetches the platform URL with an impossible username, fingerprints the
@@ -571,9 +718,9 @@ async def _seed_soft_404_baseline(client: HTTPClient, platform: Platform) -> Non
             body=body,
             probe_username=IMPOSSIBLE_USERNAME,
         )
-        _soft_404_cache().put(baseline)
+        (context.soft_404_cache if context is not None else _soft_404_cache()).put(baseline)
         log.debug("seeded soft-404 baseline for %s", platform.name)
-    except Exception as exc:  # noqa: BLE001 - best-effort background work
+    except Exception as exc:
         log.debug("soft-404 seed failed for %s: %s", platform.name, exc)
 
 
@@ -611,14 +758,16 @@ _HANDLE_PROBE_PLATFORMS: frozenset[str] = frozenset(
     {
         "GitHub", "X", "Instagram", "Reddit", "TikTok",
         "YouTube", "LinkedIn", "Telegram", "Steam", "Twitch",
-        "Pinterest", "Medium", "Dev.to", "Keybase", "Mastodon (mastodon.social)",
-        "GitLab", "HackerNews", "StackOverflow", "Quora", "Vimeo",
+        "Pinterest", "Medium", "Dev.to", "Keybase", "Mastodon",
+        "GitLab", "Hacker News", "StackOverflow", "Quora", "Vimeo",
     }
 )
 
 
 async def _phase_profile_validate(
-    cfg: ScanConfig, result: ScanResult
+    cfg: ScanConfig,
+    result: ScanResult,
+    context: ScanContext | None = None,
 ) -> None:
     """LLM-augmented verdict on borderline-confidence profile matches.
 
@@ -628,8 +777,8 @@ async def _phase_profile_validate(
     match — at worst it lowers confidence below the FP threshold; at best
     it boosts borderline matches by up to +0.15.
 
-    Synchronous skill calls are wrapped in ``asyncio.to_thread`` so the
-    engine doesn't block on network I/O.
+    Skill backends are async; validation concurrency is bounded below so a
+    scan cannot burst the configured endpoint.
     """
     if not cfg.ai_skills:
         return
@@ -640,14 +789,18 @@ async def _phase_profile_validate(
         return
 
     borderline = [
-        p
-        for p in result.platforms
-        if p.exists and p.confidence >= 0.25
+        p for p in result.platforms
+        if (p.verification or {}).get("verdict") == "uncertain"
+        and p.status == "uncertain"
     ]
     if not borderline:
         return
 
-    budget = SkillBudget(limit=cfg.ai_skill_budget)
+    budget = (
+        context.skill_budget
+        if context is not None and context.skill_budget is not None
+        else SkillBudget(limit=cfg.ai_skill_budget)
+    )
     console.print(
         f"  [bold yellow][ai][/bold yellow] Profile validation: "
         f"{len(borderline)} borderline match(es), budget={budget.limit}..."
@@ -703,6 +856,11 @@ async def _phase_profile_validate(
             p.fp_signals.append("ai_red_flags:" + ",".join(red_flags[:3]))
         if signals:
             p.fp_signals.append("ai_signals:" + "|".join(signals[:3]))
+        # AI may refine only an uncertain score. Deterministic hard-negative
+        # rows never enter this phase and therefore cannot be resurrected.
+        platform = _platform_by_name(p.platform)
+        if platform is not None:
+            _evaluate_platform_result(p, platform, cfg)
 
     # Bound parallelism so we don't burst the LLM endpoint.
     sem = asyncio.Semaphore(4)
@@ -719,7 +877,11 @@ async def _phase_profile_validate(
 
 
 async def _phase_handle_resolve(
-    client: HTTPClient, cfg: ScanConfig, platforms: list[Platform], result: ScanResult
+    client: HTTPClient,
+    cfg: ScanConfig,
+    platforms: list[Platform],
+    result: ScanResult,
+    context: ScanContext | None = None,
 ) -> ScanConfig:
     """Resolve a real name into the most likely username via quick probes.
 
@@ -745,7 +907,7 @@ async def _phase_handle_resolve(
         return cfg
 
     # Probe set: high-signal platforms only — we want to spend N×M HTTP
-    # requests, not 1924×N. Pick handles up to name_max_handles after the
+    # requests, not catalogue×N. Pick handles up to name_max_handles after the
     # quick probe.
     probe_targets = [p for p in platforms if p.name in _HANDLE_PROBE_PLATFORMS]
     if not probe_targets:
@@ -766,8 +928,15 @@ async def _phase_handle_resolve(
     scoreboard: list[tuple[str, float, int, list[PlatformResult]]] = []
     for cand in top_candidates:
         probe_cfg = replace(cfg, username=cand.handle, full_name=None)
-        probe_tasks = [_check_platform(client, probe_cfg, p) for p in probe_targets]
+        probe_tasks = [
+            _check_platform_for_context(client, probe_cfg, p, context)
+            for p in probe_targets
+        ]
         probe_results = await asyncio.gather(*probe_tasks)
+        for probe_result, platform in zip(
+            probe_results, probe_targets, strict=True
+        ):
+            _evaluate_platform_result(probe_result, platform, cfg)
         hits = [r for r in probe_results if r.exists]
         # Score = sum of confidence × candidate.score so high-likelihood handles
         # with strong site signals win, but a low-rank handle with multiple solid
@@ -814,9 +983,11 @@ def _status_from_http(status: int, exists: bool) -> str:
     if status == -1:
         return "error"
     if status in (401, 403):
-        return "login_required"
+        return "unavailable_auth"
     if status == 429:
         return "blocked"
+    if status >= 500:
+        return "error"
     return "found" if exists else "not_found"
 
 
@@ -826,12 +997,24 @@ def _status_from_http(status: int, exists: bool) -> str:
 _NEGATIVE_CACHE: dict[str, set[str]] = {}
 
 
-def _mark_not_found(username: str, platform_name: str) -> None:
-    _NEGATIVE_CACHE.setdefault(username, set()).add(platform_name)
+def _mark_not_found(
+    username: str,
+    platform_name: str,
+    *,
+    context: ScanContext | None = None,
+) -> None:
+    cache = context.negative_cache if context is not None else _NEGATIVE_CACHE
+    cache.setdefault(username, set()).add(platform_name)
 
 
-def _is_known_not_found(username: str, platform_name: str) -> bool:
-    return platform_name in _NEGATIVE_CACHE.get(username, set())
+def _is_known_not_found(
+    username: str,
+    platform_name: str,
+    *,
+    context: ScanContext | None = None,
+) -> bool:
+    cache = context.negative_cache if context is not None else _NEGATIVE_CACHE
+    return platform_name in cache.get(username, set())
 
 
 def _clear_negative_cache() -> None:
@@ -872,126 +1055,171 @@ def _extract_avatar_urls(platforms: list[PlatformResult]) -> list[tuple[str, str
     return avatars
 
 
-def _select_platforms(categories: tuple[str, ...] | None) -> list[Platform]:
-    if not categories:
-        return _verified_platforms()
+def _select_platforms(
+    categories: tuple[str, ...] | None,
+    platform_scope: str = "core",
+) -> list[Platform]:
+    """Select only from the deterministic checked-in catalogue metadata."""
     if categories == ("__all__",):
         return list(PLATFORMS)
     if categories == ("__popular__",):
         return _popular_platforms()
     if categories == ("__verified__",):
         return _verified_platforms()
-    return [p for p in PLATFORMS if p.category in categories]
+    if categories:
+        # Explicit category filters preserve their legacy meaning: search every
+        # curated platform in those categories, independent of the default core
+        # scope. Callers wanting all categories use platform_scope/full instead.
+        return [p for p in PLATFORMS if p.category in categories]
+    scope = "full" if platform_scope == "full" else "core"
+    return [p for p in PLATFORMS if scope == "full" or p.tier == "core"]
 
 
 _VERIFIED_CACHE: list[Platform] | None = None
-_VERIFIED_ALIASES: dict[str, str] = {
-    "x": "twitter",  # Twitter → X
-}
 
 
 def _verified_platforms() -> list[Platform]:
-    """Return platforms with maigret-verified detection signals (2+ of absenceStrs,
-    presenseStrs, urlProbe). ~450 platforms, near-zero fake positives."""
+    """Legacy selector backed by deterministic wire-contract metadata."""
     global _VERIFIED_CACHE
     if _VERIFIED_CACHE is not None:
         return _VERIFIED_CACHE
-    verified = set()
-    try:
-        import json
-        data = json.loads(
-            _MAIGRET_PATH.read_text(encoding="utf-8")
-        )["sites"]
-        for name, d in data.items():
-            has_absence = bool(d.get("absenceStrs"))
-            has_presence = bool(d.get("presenseStrs"))
-            has_probe = bool(d.get("urlProbe"))
-            if (has_absence and has_presence) or (has_presence and has_probe) or (has_absence and has_probe):
-                verified.add(name.lower().strip().rstrip("."))
-    except Exception:
-        pass
-    if not verified:
-        return _popular_platforms()
-    from difflib import SequenceMatcher
-    result = []
-    for p in PLATFORMS:
-        pkey = p.name.lower().strip().rstrip(".")
-        maigret_key = _VERIFIED_ALIASES.get(pkey, pkey)
-        if maigret_key in verified or pkey in verified:
-            result.append(p)
-            continue
-        for vname in verified:
-            if SequenceMatcher(None, pkey, vname).ratio() > 0.85:
-                result.append(p)
-                break
-    log.debug("verified platforms: %d out of %d", len(result), len(PLATFORMS))
-    _VERIFIED_CACHE = result
-    return result
+    _VERIFIED_CACHE = [
+        platform
+        for platform in PLATFORMS
+        if (
+            platform.url_probe
+            or platform.check_type == "json_api"
+            or (platform.absence_strings and platform.presence_strings)
+            or platform.golden_fixture
+        )
+    ]
+    return _VERIFIED_CACHE
 
 
-_POPULAR_PLATFORM_NAMES: set[str] | None = None
-_VERIFIED_PLATFORM_NAMES: set[str] | None = None
-_MAIGRET_PATH = Path(__file__).resolve().parent.parent / "scripts" / "maigret_data.json"
+_POPULAR_CACHE: list[Platform] | None = None
 
 
 def _popular_platforms() -> list[Platform]:
-    global _POPULAR_PLATFORM_NAMES
-    if _POPULAR_PLATFORM_NAMES is None:
-        try:
-            import json
-            data = json.loads(
-                _MAIGRET_PATH.read_text(encoding="utf-8")
-            )["sites"]
-            scored = sorted(
-                (d.get("alexaRank", 99999), name)
-                for name, d in data.items()
-                if d.get("alexaRank") and d["alexaRank"] < 100000
-            )
-            _POPULAR_PLATFORM_NAMES = {
-                name.lower().strip().rstrip(".") for _, name in scored[:300]
-            }
-        except Exception:
-            _POPULAR_PLATFORM_NAMES = set()
-    popular = _POPULAR_PLATFORM_NAMES
-    if not popular:
-        return list(PLATFORMS)
-    from difflib import SequenceMatcher
-    result = []
-    for p in PLATFORMS:
-        pkey = p.name.lower().strip().rstrip(".")
-        if pkey in popular:
-            result.append(p)
-            continue
-        for mname in popular:
-            ratio = SequenceMatcher(None, pkey, mname).ratio()
-            if ratio > 0.85:
-                result.append(p)
-                break
-    return result
+    global _POPULAR_CACHE
+    if _POPULAR_CACHE is not None:
+        return _POPULAR_CACHE
+    _POPULAR_CACHE = [platform for platform in PLATFORMS if platform.tier == "core"]
+    return _POPULAR_CACHE
+
+
+def _platform_by_name(name: str) -> Platform | None:
+    return next((platform for platform in PLATFORMS if platform.name == name), None)
+
+
+def _initial_confirmation_allowed(platform: Platform) -> bool:
+    """Compatibility wrapper for the fail-closed provider contract gate."""
+    return supports_confirmation(platform)
+
+
+def _result_username(result: PlatformResult, platform: Platform) -> str:
+    if result.queried_username:
+        return result.queried_username
+    prefix, marker, suffix = platform.url.partition("{username}")
+    if marker and result.url.startswith(prefix) and result.url.endswith(suffix):
+        end = len(result.url) - len(suffix) if suffix else len(result.url)
+        return result.url[len(prefix):end]
+    return ""
+
+
+def _set_probe_outcome(result: PlatformResult) -> None:
+    verdict = (result.verification or {}).get("verdict")
+    status = result.status.split(" ", 1)[0]
+    if verdict == "confirmed":
+        result.probe_outcome = ProbeOutcome.FOUND
+    elif status in {"unavailable_auth", "login_required"}:
+        result.probe_outcome = ProbeOutcome.UNAVAILABLE_AUTH
+    elif status == "unavailable_policy":
+        result.probe_outcome = ProbeOutcome.UNAVAILABLE_POLICY
+    elif status == "blocked":
+        result.probe_outcome = (
+            ProbeOutcome.RATE_LIMITED
+            if result.http_status == 429
+            else ProbeOutcome.BLOCKED
+        )
+    elif status in {"error", "timeout", "pending"}:
+        result.probe_outcome = ProbeOutcome.ERROR
+    elif status == "invalid_username":
+        result.probe_outcome = ProbeOutcome.INVALID
+    elif status == "contract_mismatch":
+        result.probe_outcome = ProbeOutcome.CONTRACT_BROKEN
+    elif verdict == "uncertain":
+        result.probe_outcome = ProbeOutcome.AMBIGUOUS
+    else:
+        result.probe_outcome = ProbeOutcome.NOT_FOUND
+
+
+def _evaluate_platform_result(
+    result: PlatformResult,
+    platform: Platform,
+    cfg: ScanConfig,
+    *,
+    deep_scraped: bool = False,
+) -> None:
+    result.evidence_class = platform.evidence_class
+    result.entity_scope = platform.entity_scope
+    result.contract_revision = platform.contract_revision
+    result.confirmation_capable = supports_confirmation(platform)
+    expected_username = _result_username(result, platform)
+    canonical = _canonical_username_from_payload(result.profile_data, expected_username)
+    if canonical:
+        result.canonical_username = canonical
+    if result.canonical_username and expected_username:
+        result.contract_verified = (
+            result.canonical_username.casefold() == expected_username.casefold()
+        )
+        if not result.contract_verified:
+            result.exists = False
+            result.status = "contract_mismatch"
+            result.fp_signals = list(result.fp_signals) + ["canonical_username_mismatch"]
+
+    presence_contract_verified = bool(
+        result.confirmation_capable
+        and (result.contract_verified or platform.golden_fixture)
+    )
+    evaluate_platform(
+        result,
+        threshold=cfg.fp_threshold,
+        trusted=deep_scraped and presence_contract_verified,
+        allow_confirmed=presence_contract_verified,
+    )
+    result.verification["provider_contract"] = {
+        "evidence_class": platform.evidence_class,
+        "entity_scope": platform.entity_scope,
+        "lookup_semantics": platform.lookup_semantics,
+        "auth_mode": platform.auth_mode,
+        "revision": platform.contract_revision,
+        "canonical_username": result.canonical_username,
+        "verified": result.contract_verified,
+        "confirmation_capable": result.confirmation_capable,
+    }
+    _set_probe_outcome(result)
 
 
 # ── Phase implementations ────────────────────────────────────────────────
 
 
 async def _phase_platform_check(
-    client: HTTPClient, cfg: ScanConfig, platforms: list[Platform], result: ScanResult
+    client: HTTPClient,
+    cfg: ScanConfig,
+    platforms: list[Platform],
+    result: ScanResult,
+    context: ScanContext | None = None,
 ) -> list[PlatformResult]:
     console.print("  [bold yellow][1/8][/bold yellow] Starting platform sweep...")
     _emit("phase_start", phase="platform_sweep", total=len(platforms))
-    tasks = [_check_platform(client, cfg, p) for p in platforms]
+    tasks = [_check_platform_for_context(client, cfg, p, context) for p in platforms]
     platform_results = await asyncio.gather(*tasks)
 
-    # Deep-scraped platforms are hand-curated and verified via API calls,
-    # so we trust them regardless of the heuristic confidence score.
     dropped = 0
-    for r in platform_results:
-        if (
-            r.exists
-            and r.platform not in DEEP_SCRAPERS
-            and r.confidence < cfg.fp_threshold
-        ):
-            r.exists = False
-            r.status = "low_confidence"
+    for r, platform in zip(platform_results, platforms, strict=True):
+        was_candidate = r.exists
+        _evaluate_platform_result(r, platform, cfg)
+        if was_candidate and (r.verification or {}).get("verdict") == "uncertain":
             dropped += 1
 
     found_count = sum(1 for r in platform_results if r.exists)
@@ -1021,7 +1249,18 @@ async def _phase_deep_scrape(
         return
 
     targets = [
-        r for r in platform_results if r.exists and r.platform in DEEP_SCRAPERS
+        r
+        for r in platform_results
+        if r.platform in DEEP_SCRAPERS
+        and not has_provider(r.platform)
+        and (
+            (platform := _platform_by_name(r.platform)) is not None
+            and platform.automated
+        )
+        and (
+            r.exists
+            or (r.verification or {}).get("verdict") == "uncertain"
+        )
     ]
     if not targets:
         console.print("  [bold green][2/8][/bold green] Deep scrape: no eligible profiles")
@@ -1038,9 +1277,232 @@ async def _phase_deep_scrape(
             # Deep scraper output wins over opportunistic extractor output.
             merged = {**(target.profile_data or {}), **data}
             target.profile_data = merged
+            target.exists = True
+            target.status = "found"
+            target.confidence = max(target.confidence, 0.85)
+            platform = _platform_by_name(target.platform)
+            if platform is not None:
+                _evaluate_platform_result(
+                    target, platform, cfg, deep_scraped=True
+                )
 
     scraped = sum(1 for d in deep_results if d)
     console.print(f"  [bold green][2/8][/bold green] Done: {scraped} profile details pulled")
+
+
+_ALIAS_PRIMARY_CANDIDATE_LIMIT = 12
+_ALIAS_FALLBACK_PLATFORM_LIMIT = 5
+_STRONG_IDENTITY_VERDICTS = frozenset({"confirmed_same", "likely_same"})
+
+
+async def _probe_alias_batch(
+    client: HTTPClient,
+    cfg: ScanConfig,
+    candidates: list[UsernameCandidate],
+    platforms: list[Platform],
+    context: ScanContext | None,
+) -> tuple[list[tuple[UsernameCandidate, Platform]], list[PlatformResult]]:
+    """Probe one bounded alias tier, batching supported provider APIs."""
+    probe_specs = [
+        (candidate, platform)
+        for candidate in candidates
+        for platform in platforms
+    ]
+    if not probe_specs:
+        return [], []
+
+    async def _probe_platform(platform: Platform) -> list[PlatformResult]:
+        if context is not None and has_provider(platform.name):
+            try:
+                batch = await lookup_provider_many(
+                    client,
+                    platform.name,
+                    [candidate.username for candidate in candidates],
+                    context.provider_credentials,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "provider %s alias batch failed (%s)",
+                    platform.name,
+                    type(exc).__name__,
+                )
+                return [
+                    PlatformResult(
+                        platform=platform.name,
+                        url=platform.url.replace("{username}", candidate.username),
+                        category=platform.category,
+                        status="error",
+                        queried_username=candidate.username,
+                        fp_signals=["provider_adapter_error"],
+                    )
+                    for candidate in candidates
+                ]
+            if batch is not None:
+                context.provider_http_requests += batch.http_request_count
+                rows: list[PlatformResult] = []
+                for candidate in candidates:
+                    observation = batch.observations.get(candidate.username)
+                    if observation is None:
+                        rows.append(
+                            PlatformResult(
+                                platform=platform.name,
+                                url=platform.url.replace(
+                                    "{username}", candidate.username
+                                ),
+                                category=platform.category,
+                                status="error",
+                                queried_username=candidate.username,
+                                fp_signals=["provider_observation_missing"],
+                            )
+                        )
+                    else:
+                        rows.append(observation.to_platform_result(platform))
+                return rows
+        return list(
+            await asyncio.gather(
+                *(
+                    _check_platform_for_context(
+                        client,
+                        replace(cfg, username=candidate.username),
+                        platform,
+                        context,
+                    )
+                    for candidate in candidates
+                )
+            )
+        )
+
+    platform_rows = await asyncio.gather(
+        *(_probe_platform(platform) for platform in platforms)
+    )
+    by_spec = {
+        (candidate.username, platform.name): row
+        for platform, rows in zip(platforms, platform_rows, strict=True)
+        for candidate, row in zip(candidates, rows, strict=True)
+    }
+    var_results = [
+        by_spec[(candidate.username, platform.name)]
+        for candidate, platform in probe_specs
+    ]
+    for var_result, (_candidate, platform) in zip(
+        var_results, probe_specs, strict=True
+    ):
+        _evaluate_platform_result(var_result, platform, cfg)
+
+    # An official deep scraper can turn a transport-level/heuristic candidate
+    # into deterministic presence proof. Empty responses never do.
+    deep_specs = [
+        (candidate, platform, var_result)
+        for var_result, (candidate, platform) in zip(
+            var_results, probe_specs, strict=True
+        )
+        if platform.name in DEEP_SCRAPERS
+        and not has_provider(platform.name)
+        and platform.automated
+        and (
+            var_result.exists
+            or (var_result.verification or {}).get("verdict") == "uncertain"
+        )
+    ]
+    deep_payloads = await asyncio.gather(
+        *(
+            _deep_scrape(client, candidate.username, var_result)
+            for candidate, _platform, var_result in deep_specs
+        )
+    )
+    for (_candidate, platform, var_result), data in zip(
+        deep_specs, deep_payloads, strict=True
+    ):
+        if not data:
+            continue
+        var_result.profile_data = {**(var_result.profile_data or {}), **data}
+        var_result.exists = True
+        var_result.status = "found (variation)"
+        var_result.confidence = max(var_result.confidence, 0.85)
+        _evaluate_platform_result(var_result, platform, cfg, deep_scraped=True)
+    return probe_specs, list(var_results)
+
+
+def _collect_alias_profiles(
+    probe_specs: list[tuple[UsernameCandidate, Platform]],
+    var_results: list[PlatformResult],
+) -> tuple[dict[str, list[PlatformResult]], list[dict[str, str]]]:
+    confirmed_by_username: dict[str, list[PlatformResult]] = {}
+    uncertain_profiles: list[dict[str, str]] = []
+    for var_result, (candidate, _platform) in zip(
+        var_results, probe_specs, strict=True
+    ):
+        verdict = (var_result.verification or {}).get("verdict")
+        if verdict == "confirmed" and var_result.exists:
+            var_result.status = "found (variation)"
+            confirmed_by_username.setdefault(candidate.username, []).append(var_result)
+        elif verdict == "uncertain":
+            uncertain_profiles.append(
+                {
+                    "username": candidate.username,
+                    "platform": var_result.platform,
+                    "status": var_result.status,
+                }
+            )
+    return confirmed_by_username, uncertain_profiles
+
+
+def _resolve_alias_candidates(
+    *,
+    cfg: ScanConfig,
+    root_payload: dict[str, Any],
+    candidates: list[UsernameCandidate],
+    confirmed_by_username: dict[str, list[PlatformResult]],
+) -> list[IdentityCandidate]:
+    identity_candidates: list[IdentityCandidate] = []
+    for candidate in candidates:
+        profiles = confirmed_by_username.get(candidate.username, [])
+        if not profiles:
+            continue
+        candidate_payload = {
+            "username": candidate.username,
+            "platforms": [profile.to_dict() for profile in profiles],
+            "emails": [],
+            "phone_intel": [],
+        }
+        candidate_discovery = merge_discoveries(
+            [
+                extract_discoverable_data(profile.profile_data)
+                for profile in profiles
+                if profile.profile_data
+            ]
+        )
+        reciprocal_link = cfg.username.casefold() in {
+            value.casefold()
+            for value in candidate_discovery.get("linked_usernames", [])
+            if isinstance(value, str)
+        }
+        resolution = correlate_identity(
+            root_payload,
+            candidate_payload,
+            handle_score=candidate.handle_similarity,
+            direct_link=(
+                "linked_profile" in candidate.discovery_reasons or reciprocal_link
+            ),
+        )
+        warnings = []
+        if not any(profile.profile_data for profile in profiles):
+            warnings.append("confirmed presence has insufficient public profile metadata")
+        identity_candidates.append(
+            IdentityCandidate(
+                username=candidate.username,
+                handle_similarity=candidate.handle_similarity,
+                discovery_reasons=list(candidate.discovery_reasons),
+                verdict=resolution.verdict,
+                score=resolution.score,
+                evidence=[signal.to_dict() for signal in resolution.signals],
+                profiles=profiles,
+                warnings=warnings,
+            )
+        )
+    return identity_candidates
 
 
 async def _phase_smart_search(
@@ -1049,12 +1511,15 @@ async def _phase_smart_search(
     platforms: list[Platform],
     platform_results: list[PlatformResult],
     result: ScanResult,
+    context: ScanContext | None = None,
 ) -> None:
     if not cfg.smart:
         console.print("  [dim][3/8] Smart search: skipped[/dim]")
         return
 
     console.print("  [bold yellow][3/8][/bold yellow] Starting smart search...")
+    wire_start = getattr(client, "request_count", None)
+    provider_wire_start = context.provider_http_requests if context is not None else 0
 
     discoveries = [
         extract_discoverable_data(r.profile_data)
@@ -1062,44 +1527,199 @@ async def _phase_smart_search(
         if r.exists and r.profile_data
     ]
     merged = merge_discoveries(discoveries)
-    variations = generate_variations(cfg.username)
-    result.variations_checked = variations
+    candidates = generate_candidates(
+        cfg.username,
+        linked_usernames=merged.get("linked_usernames", []),
+        max_candidates=cfg.alias_max_candidates,
+    )
 
-    for linked_u in merged.get("linked_usernames", []):
-        if linked_u.lower() != cfg.username.lower() and linked_u not in variations:
-            variations.append(linked_u)
-            result.discovered_usernames.append(linked_u)
-
-    not_found_platforms = [
-        p for p in platforms
-        if not any(r.platform == p.name and r.exists for r in platform_results)
+    # Prefer the platform object passed into this scan (so user YAML overrides
+    # remain effective), then fill missing aliases from the full curated catalog.
+    passed_by_name = {platform.name: platform for platform in platforms}
+    full_by_name = {platform.name: platform for platform in PLATFORMS}
+    check_platforms: list[Platform] = []
+    for name in ALIAS_PROBE_PLATFORMS[: cfg.alias_platform_limit]:
+        platform = passed_by_name.get(name) or full_by_name.get(name)
+        if platform is not None:
+            check_platforms.append(platform)
+    primary_candidates = candidates[:_ALIAS_PRIMARY_CANDIDATE_LIMIT]
+    fallback_candidates = candidates[_ALIAS_PRIMARY_CANDIDATE_LIMIT:]
+    batch_extension_platforms = [
+        platform
+        for platform in check_platforms
+        if platform.name in {"X", "Twitch"}
+        and context is not None
+        and provider_is_configured(
+            platform.name, context.provider_credentials
+        )
     ]
-    if not (variations and not_found_platforms):
-        console.print("  [bold green][3/8][/bold green] Done")
-        return
-
-    important = [p for p in not_found_platforms if p.name in IMPORTANT_PLATFORMS_FOR_VARIATIONS]
-    check_platforms = important[:8]
-    check_variations = variations[:12]
-    if not check_platforms:
+    batch_extension_names = {
+        platform.name for platform in batch_extension_platforms
+    }
+    primary_regular_platforms = [
+        platform
+        for platform in check_platforms
+        if platform.name not in batch_extension_names
+    ]
+    fallback_platform_budget = max(
+        0, _ALIAS_FALLBACK_PLATFORM_LIMIT - len(batch_extension_platforms)
+    )
+    fallback_platforms = primary_regular_platforms[:fallback_platform_budget]
+    configured_max_probes = (
+        len(primary_candidates) * len(primary_regular_platforms)
+        + len(candidates) * len(batch_extension_platforms)
+        + len(fallback_candidates) * len(fallback_platforms)
+    )
+    if not candidates or not check_platforms:
+        result.variations_checked = []
+        result.diagnostics["alias_search"] = {
+            "generated_candidate_count": len(candidates),
+            "candidate_count": 0,
+            "primary_candidate_count": 0,
+            "fallback_candidate_count": 0,
+            "batch_extended_candidate_count": 0,
+            "batch_extension_platform_count": len(batch_extension_platforms),
+            "platform_count": len(check_platforms),
+            "fallback_platform_count": len(fallback_platforms),
+            "probe_count": 0,
+            "logical_probe_count": 0,
+            "http_request_count": 0,
+            "provider_http_request_count": 0,
+            "primary_probe_count": 0,
+            "fallback_probe_count": 0,
+            "fallback_triggered": False,
+            "strong_primary": False,
+            "confirmed_profiles": 0,
+            "identity_candidates": 0,
+            "uncertain_profiles": [],
+            "max_probes": configured_max_probes,
+        }
         console.print("  [bold green][3/8][/bold green] No platforms left to check variations on")
         return
 
-    var_tasks = [
-        _check_platform(client, replace(cfg, username=var), p)
-        for var in check_variations
-        for p in check_platforms
+    primary_specs, primary_results = await _probe_alias_batch(
+        client,
+        cfg,
+        primary_candidates,
+        primary_regular_platforms,
+        context,
+    )
+    extension_specs, extension_results = await _probe_alias_batch(
+        client,
+        cfg,
+        candidates,
+        batch_extension_platforms,
+        context,
+    )
+    primary_specs.extend(extension_specs)
+    primary_results.extend(extension_results)
+    confirmed_by_username, uncertain_profiles = _collect_alias_profiles(
+        primary_specs,
+        primary_results,
+    )
+    root_payload = result.to_dict(include_all=False)
+    root_payload["identity_candidates"] = []
+    identity_candidates = _resolve_alias_candidates(
+        cfg=cfg,
+        root_payload=root_payload,
+        candidates=(
+            candidates if batch_extension_platforms else primary_candidates
+        ),
+        confirmed_by_username=confirmed_by_username,
+    )
+    strong_primary = any(
+        candidate.verdict in _STRONG_IDENTITY_VERDICTS
+        for candidate in identity_candidates
+    )
+
+    fallback_triggered = bool(
+        fallback_candidates and fallback_platforms and not strong_primary
+    )
+    fallback_specs: list[tuple[UsernameCandidate, Platform]] = []
+    fallback_results: list[PlatformResult] = []
+    if fallback_triggered:
+        fallback_specs, fallback_results = await _probe_alias_batch(
+            client,
+            cfg,
+            fallback_candidates,
+            fallback_platforms,
+            context,
+        )
+        fallback_confirmed, fallback_uncertain = _collect_alias_profiles(
+            fallback_specs,
+            fallback_results,
+        )
+        for username, profiles in fallback_confirmed.items():
+            confirmed_by_username.setdefault(username, []).extend(profiles)
+        uncertain_profiles.extend(fallback_uncertain)
+        identity_candidates = _resolve_alias_candidates(
+            cfg=cfg,
+            root_payload=root_payload,
+            candidates=[*primary_candidates, *fallback_candidates],
+            confirmed_by_username=confirmed_by_username,
+        )
+
+    checked_candidates = [
+        *primary_candidates,
+        *(
+            fallback_candidates
+            if fallback_triggered or batch_extension_platforms
+            else []
+        ),
     ]
-    var_results = await asyncio.gather(*var_tasks)
-    var_found = [r for r in var_results if r.exists]
-    for vr in var_found:
-        vr.status = "found (variation)"
-        result.platforms.append(vr)
+    result.variations_checked = [
+        candidate.username for candidate in checked_candidates
+    ]
+    all_probe_specs = [*primary_specs, *fallback_specs]
+
+    result.identity_candidates = identity_candidates
+    discovered = list(result.discovered_usernames)
+    for identity_candidate in identity_candidates:
+        if identity_candidate.username not in discovered:
+            discovered.append(identity_candidate.username)
+    result.discovered_usernames = discovered
+    result.diagnostics["alias_search"] = {
+        "generated_candidate_count": len(candidates),
+        "candidate_count": len(checked_candidates),
+        "primary_candidate_count": len(primary_candidates),
+        "fallback_candidate_count": (
+            len(fallback_candidates)
+            if fallback_triggered or batch_extension_platforms
+            else 0
+        ),
+        "batch_extended_candidate_count": (
+            len(fallback_candidates) if batch_extension_platforms else 0
+        ),
+        "batch_extension_platform_count": len(batch_extension_platforms),
+        "platform_count": len(check_platforms),
+        "fallback_platform_count": len(fallback_platforms),
+        "probe_count": len(all_probe_specs),
+        "logical_probe_count": len(all_probe_specs),
+        "http_request_count": (
+            max(0, client.request_count - wire_start)
+            if wire_start is not None and hasattr(client, "request_count")
+            else len(all_probe_specs)
+        ),
+        "provider_http_request_count": (
+            context.provider_http_requests - provider_wire_start
+            if context is not None
+            else 0
+        ),
+        "primary_probe_count": len(primary_specs),
+        "fallback_probe_count": len(fallback_specs),
+        "fallback_triggered": fallback_triggered,
+        "strong_primary": strong_primary,
+        "confirmed_profiles": sum(len(rows) for rows in confirmed_by_username.values()),
+        "identity_candidates": len(identity_candidates),
+        "uncertain_profiles": uncertain_profiles,
+        "max_probes": configured_max_probes,
+    }
 
     console.print(
         f"  [bold green][3/8][/bold green] Done: "
-        f"{len(check_variations)} variations x {len(check_platforms)} platforms, "
-        f"{len(var_found)} new results"
+        f"{len(checked_candidates)} variations, {len(all_probe_specs)} logical probes, "
+        f"{result.diagnostics['alias_search']['http_request_count']} HTTP requests, "
+        f"{len(identity_candidates)} identity candidates"
     )
 
 
@@ -1336,6 +1956,7 @@ async def _phase_recursive(
     cfg: ScanConfig,
     platforms: list[Platform],
     result: ScanResult,
+    context: ScanContext | None = None,
 ) -> None:
     """Feed freshly-discovered usernames back into the platform sweep.
 
@@ -1384,16 +2005,13 @@ async def _phase_recursive(
         )
         for candidate in pass_queue:
             candidate_cfg = replace(cfg, username=candidate)
-            tasks = [_check_platform(client, candidate_cfg, p) for p in platforms]
+            tasks = [
+                _check_platform_for_context(client, candidate_cfg, p, context)
+                for p in platforms
+            ]
             new_results = await asyncio.gather(*tasks)
-            for r in new_results:
-                if (
-                    r.exists
-                    and r.platform not in DEEP_SCRAPERS
-                    and r.confidence < cfg.fp_threshold
-                ):
-                    r.exists = False
-                    r.status = "low_confidence"
+            for r, platform in zip(new_results, platforms, strict=True):
+                _evaluate_platform_result(r, platform, cfg)
                 if r.exists:
                     r.status = f"found (pivot:{candidate})"
                     result.platforms.append(r)
@@ -1739,15 +2357,291 @@ def _phase_enrichment(cfg: ScanConfig, result: ScanResult) -> None:
     result.enrichment = report.to_dict()
 
 
+async def _phase_ai_report(
+    cfg: ScanConfig,
+    result: ScanResult,
+    context: ScanContext,
+) -> None:
+    """Generate the optional executive summary through the skill registry."""
+    if not cfg.ai_report:
+        return
+    from core.analysis.prompts import _trim_payload
+    from core.analysis.skill_loader import SkillError, run_skill
+
+    try:
+        result.ai_report = await run_skill(
+            "exec_summary",
+            {"scan": _trim_payload(result.to_dict(include_all=True))},
+            budget=context.skill_budget,
+        )
+    except SkillError as exc:
+        log.debug("exec_summary failed: %s", exc)
+        result.diagnostics.setdefault("warnings", []).append(
+            "AI executive summary was requested but could not be generated"
+        )
+
+
+@dataclass
+class _ScanState:
+    cfg: ScanConfig
+    result: ScanResult
+    platforms: list[Platform]
+    client: HTTPClient
+    context: ScanContext
+    platform_results: list[PlatformResult]
+
+
+@dataclass(frozen=True)
+class PhaseSpec:
+    """One centrally registered engine phase."""
+
+    name: str
+    enabled: Callable[[_ScanState], bool]
+    runner: Callable[[_ScanState], Awaitable[Any] | Any]
+    metrics: Callable[[_ScanState], dict[str, Any]] = lambda _state: {}
+
+
+async def _execute_phase(spec: PhaseSpec, state: _ScanState) -> Any:
+    """Run one phase with timing, diagnostics, isolation and cancellation."""
+    phases = state.result.diagnostics.setdefault("phases", {})
+    if not spec.enabled(state):
+        phases[spec.name] = {"status": "skipped", "duration_ms": 0, "metrics": {}}
+        return None
+
+    started = time.monotonic()
+    state.context.emit("phase_start", phase=spec.name)
+    try:
+        value = spec.runner(state)
+        if inspect.isawaitable(value):
+            value = await value
+    except asyncio.CancelledError:
+        phases[spec.name] = {
+            "status": "cancelled",
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
+            "metrics": {},
+        }
+        state.context.emit("phase_end", phase=spec.name, status="cancelled")
+        raise
+    except Exception as exc:
+        duration = round((time.monotonic() - started) * 1000, 2)
+        log.warning("phase %s failed: %s", spec.name, exc)
+        phases[spec.name] = {
+            "status": "error",
+            "duration_ms": duration,
+            "metrics": {},
+            "error": type(exc).__name__,
+        }
+        warning = f"phase {spec.name} failed ({type(exc).__name__})"
+        state.result.diagnostics.setdefault("warnings", []).append(warning)
+        state.context.emit("error", phase=spec.name, message=warning)
+        return None
+
+    duration = round((time.monotonic() - started) * 1000, 2)
+    metrics = spec.metrics(state)
+    phases[spec.name] = {
+        "status": "completed",
+        "duration_ms": duration,
+        "metrics": metrics,
+    }
+    state.context.emit("phase_end", phase=spec.name, status="completed", **metrics)
+    return value
+
+
+def _phase_metrics(state: _ScanState) -> dict[str, Any]:
+    return {
+        "confirmed": state.result.found_count,
+        "uncertain": sum(
+            1
+            for item in state.result.platforms
+            if (item.verification or {}).get("verdict") == "uncertain"
+        ),
+        "platforms": len(state.result.platforms),
+    }
+
+
+def _alias_phase_metrics(state: _ScanState) -> dict[str, Any]:
+    metrics = state.result.diagnostics.get("alias_search") or {}
+    return {
+        "candidates": int(metrics.get("candidate_count", 0)),
+        "platforms": int(metrics.get("platform_count", 0)),
+        "requests": int(metrics.get("probe_count", 0)),
+        "logical_probes": int(metrics.get("logical_probe_count", 0)),
+        "http_requests": int(metrics.get("http_request_count", 0)),
+        "provider_http_requests": int(
+            metrics.get("provider_http_request_count", 0)
+        ),
+        "batch_extended_candidates": int(
+            metrics.get("batch_extended_candidate_count", 0)
+        ),
+        "batch_extension_platforms": int(
+            metrics.get("batch_extension_platform_count", 0)
+        ),
+        "primary_requests": int(metrics.get("primary_probe_count", 0)),
+        "fallback_requests": int(metrics.get("fallback_probe_count", 0)),
+        "fallback_triggered": bool(metrics.get("fallback_triggered", False)),
+        "confirmed_profiles": int(metrics.get("confirmed_profiles", 0)),
+        "identity_candidates": int(metrics.get("identity_candidates", 0)),
+        "uncertain_profiles": len(metrics.get("uncertain_profiles", [])),
+    }
+
+
+def _phase_registry() -> tuple[PhaseSpec, ...]:
+    """Return the fixed-order registry used by every entrypoint."""
+
+    async def handle_resolve(state: _ScanState) -> None:
+        state.cfg = await _phase_handle_resolve(
+            state.client,
+            state.cfg,
+            state.platforms,
+            state.result,
+            context=state.context,
+        )
+        state.result.username = state.cfg.username
+
+    async def platform_check(state: _ScanState) -> None:
+        if state.cfg.email_only:
+            state.cfg = replace(
+                state.cfg,
+                email=True,
+                breach=True,
+                holehe=True,
+                ghunt=True,
+            )
+            state.platform_results = []
+            state.result.platforms = []
+            return
+        state.platform_results = await _phase_platform_check(
+            state.client,
+            state.cfg,
+            state.platforms,
+            state.result,
+            context=state.context,
+        )
+
+    return (
+        PhaseSpec("handle_resolve", lambda s: bool(s.cfg.full_name), handle_resolve),
+        PhaseSpec("platform_check", lambda _s: True, platform_check, _phase_metrics),
+        PhaseSpec(
+            "profile_validate",
+            lambda s: s.cfg.ai_skills,
+            lambda s: _phase_profile_validate(s.cfg, s.result, context=s.context),
+            _phase_metrics,
+        ),
+        PhaseSpec(
+            "deep_scrape",
+            lambda s: s.cfg.deep and not bool(s.cfg.email_only),
+            lambda s: _phase_deep_scrape(s.client, s.cfg, s.platform_results),
+            _phase_metrics,
+        ),
+        PhaseSpec(
+            "smart_search",
+            lambda s: s.cfg.smart and not bool(s.cfg.email_only),
+            lambda s: _phase_smart_search(
+                s.client,
+                s.cfg,
+                s.platforms,
+                s.platform_results,
+                s.result,
+                context=s.context,
+            ),
+            _alias_phase_metrics,
+        ),
+        PhaseSpec("photo", lambda s: s.cfg.photo, lambda s: _phase_photo(s.client, s.cfg, s.result)),
+        PhaseSpec(
+            "email_breach",
+            lambda s: s.cfg.email,
+            lambda s: _phase_email_breach(
+                s.client, s.cfg, s.platform_results, s.result
+            ),
+        ),
+        PhaseSpec(
+            "web_presence",
+            lambda s: s.cfg.web,
+            lambda s: _phase_web_presence(
+                s.client, s.cfg, s.platform_results, s.result
+            ),
+        ),
+        PhaseSpec("whois", lambda s: s.cfg.whois, lambda s: _phase_whois(s.cfg, s.result)),
+        PhaseSpec(
+            "dns_subdomain",
+            lambda s: s.cfg.dns or s.cfg.subdomain,
+            lambda s: _phase_dns_subdomain(s.client, s.cfg, s.result),
+        ),
+        PhaseSpec(
+            "recursive",
+            lambda s: s.cfg.recursive and s.cfg.recursive_depth > 0,
+            lambda s: _phase_recursive(
+                s.client, s.cfg, s.platforms, s.result, context=s.context
+            ),
+            _phase_metrics,
+        ),
+        PhaseSpec(
+            "reverse_image",
+            lambda s: s.cfg.reverse_image,
+            lambda s: _phase_reverse_image(s.client, s.cfg, s.result),
+        ),
+        PhaseSpec(
+            "username_history",
+            lambda s: s.cfg.past_usernames,
+            lambda s: _phase_username_history(s.client, s.cfg, s.result),
+        ),
+        PhaseSpec("passive", lambda s: s.cfg.passive, lambda s: _phase_passive(s.client, s.cfg, s.result)),
+        PhaseSpec("phone", lambda s: bool(s.cfg.phone), lambda s: _phase_phone(s.client, s.cfg, s.result)),
+        PhaseSpec(
+            "crypto",
+            lambda s: bool(s.cfg.crypto_addresses),
+            lambda s: _phase_crypto(s.client, s.cfg, s.result),
+        ),
+        PhaseSpec("recon", lambda s: bool(s.cfg.redteam_domain), lambda s: _phase_recon(s.client, s.cfg, s.result)),
+        PhaseSpec("gitleaks", lambda s: bool(s.cfg.gitleaks_paths), lambda s: _phase_gitleaks(s.cfg, s.result)),
+        PhaseSpec("exif", lambda s: bool(s.cfg.exif_image_urls), lambda s: _phase_exif(s.client, s.cfg, s.result)),
+        PhaseSpec("wigle", lambda s: bool(s.cfg.bssid or s.cfg.ssid), lambda s: _phase_wigle(s.client, s.cfg, s.result)),
+        PhaseSpec("company", lambda s: bool(s.cfg.company_query), lambda s: _phase_company(s.client, s.cfg, s.result)),
+        PhaseSpec(
+            "doc_metadata",
+            lambda s: bool(s.cfg.harvest_doc_urls),
+            lambda s: _phase_doc_metadata(s.client, s.cfg, s.result),
+        ),
+        PhaseSpec("intelx", lambda s: bool(s.cfg.intelx_term), lambda s: _phase_intelx(s.client, s.cfg, s.result)),
+        PhaseSpec("cross_reference", lambda _s: True, lambda s: _finalize_cross_reference(s.result)),
+        PhaseSpec("geocode", lambda s: s.cfg.geocode, lambda s: _phase_geocode(s.cfg, s.result)),
+        PhaseSpec("enrichment", lambda s: s.cfg.enrichment, lambda s: _phase_enrichment(s.cfg, s.result)),
+        PhaseSpec("ai_report", lambda s: s.cfg.ai_report, lambda s: _phase_ai_report(s.cfg, s.result, s.context)),
+    )
+
+
+async def _drain_seed_tasks(context: ScanContext, *, cancel: bool = False) -> None:
+    """Finish cache warmers on success and stop them promptly on cancellation."""
+    tasks = tuple(context.seed_tasks)
+    if not tasks:
+        return
+    if cancel:
+        for task in tasks:
+            task.cancel()
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        log.debug("soft-404 seed drain timed out; pending tasks cancelled")
+
+
 # ── Public entrypoint ────────────────────────────────────────────────────
 
 
 async def run_scan(cfg: ScanConfig) -> ScanResult:
     """Run an OSINT scan based on the provided immutable configuration."""
+    if not cfg.username and not (cfg.full_name or cfg.email_only):
+        raise ValueError("username is empty")
     start_time = time.monotonic()
-    _clear_negative_cache()
     result = ScanResult(username=cfg.username)
-    platforms = _select_platforms(cfg.categories)
+    platforms = _select_platforms(cfg.categories, cfg.platform_scope)
+    context = ScanContext.create(cfg)
+    selected_by_name = {platform.name: platform for platform in platforms}
 
     async with HTTPClient(
         proxy=cfg.proxy if not cfg.proxies else None,
@@ -1757,165 +2651,60 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
         fingerprint=cfg.fingerprint,
         new_circuit_every=cfg.new_circuit_every,
         tor_control_password=cfg.tor_control_password,
+        allow_private_networks=cfg.allow_private_networks,
     ) as client:
+        prepared_credentials = await prepare_provider_credentials(
+            client,
+            context.provider_credentials,
+            provider_names=_providers_requiring_token_prep(cfg, selected_by_name),
+        )
+        context.provider_credentials = prepared_credentials.credentials
+        context.provider_http_requests += prepared_credentials.http_request_count
+        result.diagnostics["provider_auth"] = {
+            name: status.to_safe_dict()
+            for name, status in prepared_credentials.statuses.items()
+        }
+        result.diagnostics["provider_coverage"] = {
+            name: {
+                "configured": provider_is_configured(
+                    name, context.provider_credentials
+                ),
+                "selected": name in selected_by_name,
+                "auth_mode": (
+                    selected_by_name[name].auth_mode
+                    if name in selected_by_name
+                    else "unknown"
+                ),
+            }
+            for name in sorted(PROVIDERS)
+        }
         if cfg.breach and not hibp_available():
             console.print(
                 "  [yellow]Warning:[/yellow] [bold]HIBP_API_KEY[/bold] not set; breach check will be skipped."
             )
 
-        # Phase 0 (optional): resolve cfg.full_name to a username via quick
-        # candidate probes. Mutates cfg.username for the rest of the scan.
-        if cfg.full_name:
-            cfg = await _phase_handle_resolve(client, cfg, platforms, result)
-            result.username = cfg.username
-
-        # cfg.email_only short-circuits the platform sweep: caller already
-        # has an identifier, so we jump straight to the breach/holehe/ghunt
-        # chain. Force the relevant flags on so downstream phases run.
-        if cfg.email_only:
-            cfg = replace(
-                cfg,
-                email=True,
-                breach=True,
-                holehe=True,
-                ghunt=True,
-            )
-            platform_results = []
-            result.platforms = []
-            console.print(
-                f"  [bold cyan][email-only][/bold cyan] Target: {cfg.email_only} "
-                f"— skipping platform sweep, running email pivots only."
-            )
+        state = _ScanState(
+            cfg=cfg,
+            result=result,
+            platforms=platforms,
+            client=client,
+            context=context,
+            platform_results=[],
+        )
+        try:
+            for phase in _phase_registry():
+                await _execute_phase(phase, state)
+        except asyncio.CancelledError:
+            await _drain_seed_tasks(context, cancel=True)
+            raise
         else:
-            platform_results = await _phase_platform_check(client, cfg, platforms, result)
-
-        _emit("phase_start", phase="deep_scrape")
-        await _phase_deep_scrape(client, cfg, platform_results)
-        _emit("phase_end", phase="deep_scrape")
-
-        # AI-augmented validation of borderline matches (cfg.ai_skills).
-        _emit("phase_start", phase="profile_validate")
-        await _phase_profile_validate(cfg, result)
-        _emit("phase_end", phase="profile_validate")
-
-        _emit("phase_start", phase="smart_search")
-        await _phase_smart_search(client, cfg, platforms, platform_results, result)
-        _emit("phase_end", phase="smart_search")
-
-        _emit("phase_start", phase="photo")
-        await _phase_photo(client, cfg, result)
-        _emit("phase_end", phase="photo")
-
-        _emit("phase_start", phase="email_breach")
-        await _phase_email_breach(client, cfg, platform_results, result)
-        _emit("phase_end", phase="email_breach", emails=len(result.emails))
-
-        _emit("phase_start", phase="web_presence")
-        await _phase_web_presence(client, cfg, platform_results, result)
-        _emit("phase_end", phase="web_presence")
-
-        _emit("phase_start", phase="whois")
-        await _phase_whois(cfg, result)
-        _emit("phase_end", phase="whois")
-
-        _emit("phase_start", phase="dns_subdomain")
-        await _phase_dns_subdomain(client, cfg, result)
-        _emit("phase_end", phase="dns_subdomain")
-
-        _emit("phase_start", phase="recursive")
-        await _phase_recursive(client, cfg, platforms, result)
-        _emit("phase_end", phase="recursive")
-
-        _emit("phase_start", phase="reverse_image")
-        await _phase_reverse_image(client, cfg, result)
-        _emit("phase_end", phase="reverse_image")
-
-        _emit("phase_start", phase="username_history")
-        await _phase_username_history(client, cfg, result)
-        _emit("phase_end", phase="username_history")
-
-        _emit("phase_start", phase="passive")
-        await _phase_passive(client, cfg, result)
-        _emit("phase_end", phase="passive")
-
-        _emit("phase_start", phase="phone")
-        await _phase_phone(client, cfg, result)
-        _emit("phase_end", phase="phone")
-
-        _emit("phase_start", phase="crypto")
-        await _phase_crypto(client, cfg, result)
-        _emit("phase_end", phase="crypto")
-
-        _emit("phase_start", phase="recon")
-        await _phase_recon(client, cfg, result)
-        _emit(
-            "phase_end",
-            phase="recon",
-            subdomains=len(result.recon_subdomains),
-            committers=len(result.github_committers),
-            candidates=len(result.email_candidates),
-            secrets=len(result.leaked_secrets),
-        )
-
-        _emit("phase_start", phase="gitleaks")
-        await _phase_gitleaks(cfg, result)
-        _emit("phase_end", phase="gitleaks", secrets=len(result.leaked_secrets))
-
-        _emit("phase_start", phase="exif")
-        await _phase_exif(client, cfg, result)
-        _emit("phase_end", phase="exif", reports=len(result.exif_reports))
-
-        _emit("phase_start", phase="wigle")
-        await _phase_wigle(client, cfg, result)
-        _emit("phase_end", phase="wigle")
-
-        _emit("phase_start", phase="company")
-        await _phase_company(client, cfg, result)
-        _emit(
-            "phase_end",
-            phase="company",
-            companies=len(result.company_records),
-        )
-
-        _emit("phase_start", phase="doc_metadata")
-        await _phase_doc_metadata(client, cfg, result)
-        _emit(
-            "phase_end",
-            phase="doc_metadata",
-            documents=len(result.document_metadata),
-        )
-
-        _emit("phase_start", phase="intelx")
-        await _phase_intelx(client, cfg, result)
-        _emit("phase_end", phase="intelx")
-
-        # Drain any in-flight soft-404 baseline seed tasks while the
-        # HTTPClient session is still alive. Short timeout — these are
-        # purely cache-warming and must not block the scan if a site stalls.
-        if _PENDING_SEED_TASKS:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*_PENDING_SEED_TASKS, return_exceptions=True),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                log.debug("soft-404 seed drain timed out; tasks will continue in background")
-
-    _emit("phase_start", phase="cross_reference")
-    _finalize_cross_reference(result)
-    _emit("phase_end", phase="cross_reference")
-
-    if cfg.geocode:
-        _emit("phase_start", phase="geocode")
-        await _phase_geocode(cfg, result)
-        _emit("phase_end", phase="geocode", resolved=len(result.geo_points))
-
-    _emit("phase_start", phase="enrichment")
-    _phase_enrichment(cfg, result)
-    _emit("phase_end", phase="enrichment")
+            cfg = state.cfg
+            # Cache warmers need the HTTP session, so drain them before the
+            # client context exits. They never get to delay a scan indefinitely.
+            await _drain_seed_tasks(context)
 
     result.scan_time = time.monotonic() - start_time
-    _emit(
+    context.emit(
         "done",
         phase="done",
         scan_time=result.scan_time,
@@ -1930,7 +2719,7 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
 async def scan(
     username: str,
     deep: bool = True,
-    smart: bool = False,
+    smart: bool = True,
     email: bool = False,
     web: bool = False,
     whois_check: bool = False,

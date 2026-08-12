@@ -1,11 +1,22 @@
 import hashlib
 import re
-import sys
 from urllib.parse import urlparse
 
 # Common social-profile path prefixes that wrap the actual handle.
 # e.g. https://www.linkedin.com/in/erkanrzgc  →  erkanrzgc
 _PROFILE_PATH_PREFIXES = ("in", "u", "user", "users", "profile", "@")
+_FORBIDDEN_HANDLE_RE = re.compile(r"[\s/\\?#&=%\x00-\x1f\x7f]")
+
+
+def _validate_handle(handle: str) -> str:
+    cleaned = handle.lstrip("@").strip()
+    if not cleaned:
+        raise ValueError("username is empty")
+    if len(cleaned) > 128:
+        raise ValueError("username is too long (maximum 128 characters)")
+    if _FORBIDDEN_HANDLE_RE.search(cleaned):
+        raise ValueError("username contains unsafe URL or whitespace characters")
+    return cleaned
 
 
 def sanitize_username(username: str) -> str:
@@ -36,13 +47,9 @@ def sanitize_username(username: str) -> str:
                 f"could not extract a username from {username!r}. "
                 "Pass just the handle (e.g. 'erkanrzgc') instead of the full URL."
             )
-        print(
-            f"[sanitize_username] interpreted {username!r} as URL → handle {handle!r}",
-            file=sys.stderr,
-        )
-        return handle.lstrip("@")
+        return _validate_handle(handle)
 
-    return raw.lstrip("@")
+    return _validate_handle(raw)
 
 
 def _extract_handle_from_url(raw: str) -> str:

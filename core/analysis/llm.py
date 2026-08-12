@@ -7,7 +7,8 @@ Design notes
 - The analyzer talks to a ``Backend`` Protocol, not llama_cpp directly, so
   tests can inject a stub that returns a canned JSON string without needing
   a 5GB GGUF file.
-- Model defaults target Cisco Foundation-Sec-8B Q5_K_M — ~5.7GB on disk, fits
+- Model defaults target Foundation-Sec-1.1-8B Q4_K_M and pin its download
+  revision for reproducible installs. The quantized model fits
   a single RTX 5060 8GB at ``n_gpu_layers=-1``. Override via env vars.
 """
 
@@ -21,9 +22,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-import aiohttp
-
-from core.analysis.prompts import SYSTEM_PROMPT, build_user_prompt
+from core.analysis.prompts import _trim_payload
+from core.http_client import HTTPClient
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,10 @@ DEFAULT_REPO_ID = os.environ.get(
 DEFAULT_MODEL_FILE = os.environ.get(
     "OSINT_LLM_FILE",
     "foundation-sec-1.1-8b-instruct-q4_k_m.gguf",
+)
+DEFAULT_MODEL_REVISION = os.environ.get(
+    "OSINT_LLM_REVISION",
+    "0b58da4736f799f3cb5bbaffb8a39025f1c4e5df",
 )
 DEFAULT_CACHE_DIR = Path(
     os.environ.get(
@@ -58,6 +62,9 @@ DEFAULT_HTTP_MODEL = os.environ.get(
 )
 DEFAULT_HTTP_API_KEY = os.environ.get("OSINT_LLM_API_KEY", "")
 DEFAULT_HTTP_TIMEOUT = float(os.environ.get("OSINT_LLM_TIMEOUT", "120"))
+DEFAULT_HTTP_ALLOW_PRIVATE_NETWORKS = os.environ.get(
+    "OSINT_LLM_ALLOW_PRIVATE_NETWORKS", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 class LLMUnavailable(RuntimeError):
@@ -139,11 +146,13 @@ class HttpBackend:
         model: str = "",
         api_key: str = "",
         timeout: float = DEFAULT_HTTP_TIMEOUT,
+        allow_private_networks: bool = DEFAULT_HTTP_ALLOW_PRIVATE_NETWORKS,
     ) -> None:
         self._url = url
         self._model = model
         self._api_key = api_key
         self._timeout = timeout
+        self._allow_private_networks = allow_private_networks
 
     async def complete(self, system: str, user: str, *, max_tokens: int, temperature: float) -> str:
         payload: dict[str, Any] = {
@@ -160,17 +169,20 @@ class HttpBackend:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        timeout = aiohttp.ClientTimeout(total=self._timeout)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self._url, json=payload, headers=headers) as resp:
-                    body = await resp.text()
-        except aiohttp.ClientError as exc:
+            async with HTTPClient(
+                request_timeout=self._timeout,
+                allow_private_networks=self._allow_private_networks,
+            ) as client:
+                status, result, _elapsed = await client.post_json(
+                    self._url,
+                    payload,
+                    headers,
+                )
+        except (OSError, ValueError) as exc:
             raise LLMUnavailable(f"HTTP LLM request failed: {exc}") from exc
-        try:
-            result = json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise LLMUnavailable(f"HTTP LLM returned non-JSON body: {exc}") from exc
+        if status != 200 or result is None:
+            raise LLMUnavailable(f"HTTP LLM returned status {status}")
         choices = result.get("choices") or []
         if not choices:
             raise LLMUnavailable("HTTP LLM returned no choices")
@@ -221,14 +233,27 @@ class LLMAnalyzer:
     async def analyze(self, scan_payload: dict[str, Any]) -> AIReport:
         if self._backend is None:
             raise LLMUnavailable("LLMAnalyzer has no backend — call from_env() or inject one")
-        user_prompt = build_user_prompt(scan_payload)
-        raw = await self._backend.complete(
-            SYSTEM_PROMPT,
-            user_prompt,
-            max_tokens=self._max_tokens,
-            temperature=self._temperature,
+        # The legacy public method now routes through the same versioned skill
+        # registry as engine AI phases. Keep its injected backend contract for
+        # callers and tests.
+        from core.analysis.skill_loader import SkillError, run_skill
+
+        try:
+            payload = await run_skill(
+                "exec_summary",
+                {"scan": _trim_payload(scan_payload)},
+                backend=self._backend,
+                use_cache=False,
+            )
+        except SkillError as exc:
+            raise LLMUnavailable(str(exc)) from exc
+        return AIReport(
+            identity_summary=str(payload.get("identity_summary", "")),
+            strong_linkages=[str(item) for item in payload.get("strong_linkages", [])],
+            exposures=[str(item) for item in payload.get("exposures", [])],
+            next_steps=[str(item) for item in payload.get("next_steps", [])],
+            confidence=max(0, min(100, int(payload.get("confidence", 0)))),
         )
-        return parse_report(raw)
 
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)

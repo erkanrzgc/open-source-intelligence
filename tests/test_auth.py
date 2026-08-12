@@ -120,6 +120,26 @@ def test_decode_token_rejects_malformed() -> None:
         auth.decode_token("missing-dots", secret="s")
 
 
+def test_decode_token_rejects_signed_non_object_payload() -> None:
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    def encode(value) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    header = encode({"alg": "HS256", "typ": "JWT"})
+    payload = encode(["valid-signature", "wrong-shape"])
+    signing_input = f"{header}.{payload}".encode("ascii")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(b"s", signing_input, hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+
+    with pytest.raises(auth.AuthError, match="malformed payload"):
+        auth.decode_token(f"{header}.{payload}.{signature}", secret="s")
+
+
 def test_decode_token_rejects_wrong_algorithm() -> None:
     import base64
     import json

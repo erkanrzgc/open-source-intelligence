@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from core import engine as engine_mod
 from core.config import ScanConfig
 from core.engine import _phase_geocode
 from core.geo import GeoPoint

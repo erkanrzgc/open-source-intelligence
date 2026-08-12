@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import os
 
-import aiohttp
-
+from core.http_client import HTTPClient
 from core.logging_setup import get_logger
 from core.notify.base import Notification
 
@@ -28,7 +27,7 @@ class TelegramNotifier:
         self._timeout = timeout
 
     @classmethod
-    def from_env(cls) -> "TelegramNotifier | None":
+    def from_env(cls) -> TelegramNotifier | None:
         token = os.environ.get("OSINT_TELEGRAM_BOT_TOKEN", "").strip()
         chat = os.environ.get("OSINT_TELEGRAM_CHAT_ID", "").strip()
         if not token or not chat:
@@ -45,16 +44,12 @@ class TelegramNotifier:
             "disable_web_page_preview": True,
         }
         try:
-            timeout = aiohttp.ClientTimeout(total=self._timeout)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload) as resp:
-                    if resp.status >= 400:
-                        body = await resp.text()
-                        log.warning(
-                            "telegram notify HTTP %s: %s", resp.status, body[:200]
-                        )
-                        return False
-                    return True
-        except (aiohttp.ClientError, OSError) as exc:
+            async with HTTPClient(request_timeout=self._timeout) as client:
+                status, _body, _elapsed = await client.post_json(url, payload)
+            if status <= 0 or status >= 400:
+                log.warning("telegram notify HTTP %s", status)
+                return False
+            return True
+        except (OSError, ValueError) as exc:
             log.warning("telegram notify failed: %s", exc)
             return False

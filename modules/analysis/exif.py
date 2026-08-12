@@ -38,7 +38,7 @@ try:  # pragma: no cover — exercised in environments without Pillow
     from PIL import ExifTags, Image  # type: ignore[import-not-found]
 
     _PIL_AVAILABLE = True
-except Exception:  # noqa: BLE001 — any import failure means PIL is not usable
+except Exception:
     _PIL_AVAILABLE = False
     ExifTags = None  # type: ignore[assignment]
     Image = None  # type: ignore[assignment]
@@ -81,7 +81,7 @@ def _to_float(value: Any) -> float | None:
     """Coerce EXIF rationals / IFDRational / numeric to float, else ``None``."""
     if value is None:
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
     if isinstance(value, tuple) and len(value) == 2:
         num, den = value
@@ -110,7 +110,7 @@ def _dms_to_decimal(
     """
     if dms is None or not ref:
         return None
-    if not isinstance(dms, (tuple, list)) or len(dms) != 3:
+    if not isinstance(dms, tuple | list) or len(dms) != 3:
         return None
     d = _to_float(dms[0])
     m = _to_float(dms[1])
@@ -146,11 +146,11 @@ def _decode_str(value: Any) -> str | None:
 
 def _serialize_raw(value: Any) -> Any:
     """Reduce arbitrary EXIF values to JSON-friendly primitives for raw_tags."""
-    if isinstance(value, (str, int, float, bool)):
+    if isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, bytes):
         return _decode_str(value) or value.hex()[:80]
-    if isinstance(value, (tuple, list)):
+    if isinstance(value, tuple | list):
         f = _to_float(value)
         if f is not None:
             return f
@@ -260,9 +260,9 @@ def extract_from_bytes(data: bytes, *, source: str = "") -> ExifReport:
                 gps_ifd = exif_obj.get_ifd(_TAG_GPS_INFO)
                 if gps_ifd:
                     gps_dict = dict(gps_ifd)
-            except Exception as exc:  # noqa: BLE001 — Pillow can throw on malformed IFD
+            except Exception as exc:
                 log.debug("exif: gps ifd parse failed: %s", exc)
-    except Exception as exc:  # noqa: BLE001 — corrupt or non-image input
+    except Exception as exc:
         log.debug("exif: cannot open bytes from %s: %s", source, exc)
         return _empty(source)
 

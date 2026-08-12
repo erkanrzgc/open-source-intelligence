@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Write
     out_path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False), encoding="utf-8")
-    print(f"\nEnrichment results:")
+    print("\nEnrichment results:")
     print(f"  username_pattern added: {added_pattern}")
     print(f"  absence_strings added: {added_absence}")
     print(f"  url_probe added:        {added_probe}")

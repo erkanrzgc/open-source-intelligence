@@ -3,6 +3,7 @@
 from core.models import (
     CrossReferenceResult,
     EmailResult,
+    IdentityCandidate,
     PhotoMatch,
     PlatformResult,
     ScanResult,
@@ -49,6 +50,23 @@ def test_export_html_escapes_username_and_renders_sections(tmp_path):
         subdomains=["api.alice.dev", "www.alice.dev"],
         variations_checked=["alice_", "realalice"],
         discovered_usernames=["alice_dev"],
+        identity_candidates=[
+            IdentityCandidate(
+                username="alice_dev",
+                handle_similarity=0.9,
+                verdict="possible_same",
+                score=0.46,
+                evidence=[{"kind": "display_name", "detail": "exact display name"}],
+                profiles=[
+                    PlatformResult(
+                        platform="GitLab",
+                        url="https://gitlab.com/alice_dev",
+                        category="dev",
+                        exists=True,
+                    )
+                ],
+            )
+        ],
         photo_matches=[
             PhotoMatch(
                 platform_a="GitHub",
@@ -85,6 +103,7 @@ def test_export_html_escapes_username_and_renders_sections(tmp_path):
         "Subdomains",
         "Smart Search",
         "Confidence Score",
+        "Similar Usernames / Identity Candidates",
     ):
         assert section in html
     assert "Risk Flags" in html
@@ -92,3 +111,5 @@ def test_export_html_escapes_username_and_renders_sections(tmp_path):
     assert "Priority" in html
     assert "Confidence" in html
     assert "Recommended Actions By Severity" in html
+    assert "alice_dev" in html
+    assert "possible_same" in html

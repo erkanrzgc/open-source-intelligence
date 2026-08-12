@@ -25,7 +25,7 @@ async def lookup_phone(
     extra = {}
     try:
         nv = await numverify.enrich(client, meta.get("e164", ""))
-    except Exception as exc:  # noqa: BLE001 - best-effort enrichment
+    except Exception as exc:
         log.debug("numverify failed: %s", exc)
         nv = {}
 

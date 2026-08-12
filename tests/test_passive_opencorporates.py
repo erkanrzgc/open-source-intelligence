@@ -11,7 +11,6 @@ from core.http_client import HTTPClient
 from modules.passive import opencorporates
 from modules.recon.models import CompanyOfficer, CompanyRecord
 
-
 # ── Pure parsing ────────────────────────────────────────────────────
 
 

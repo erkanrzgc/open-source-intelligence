@@ -1,0 +1,51 @@
+name: Provider Contract Smoke
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-provider-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install runtime
+        run: python -m pip install -e .
+
+      - name: Check public and configured provider contracts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OSINT_FOREM_API_KEY: ${{ secrets.OSINT_FOREM_API_KEY }}
+          OSINT_REDDIT_BEARER_TOKEN: ${{ secrets.OSINT_REDDIT_BEARER_TOKEN }}
+          OSINT_REDDIT_CLIENT_ID: ${{ secrets.OSINT_REDDIT_CLIENT_ID }}
+          OSINT_REDDIT_CLIENT_SECRET: ${{ secrets.OSINT_REDDIT_CLIENT_SECRET }}
+          OSINT_REDDIT_USER_AGENT: open-source-intelligence-contract-smoke/1.0
+          OSINT_X_BEARER_TOKEN: ${{ secrets.OSINT_X_BEARER_TOKEN }}
+          OSINT_YOUTUBE_API_KEY: ${{ secrets.OSINT_YOUTUBE_API_KEY }}
+          OSINT_TWITCH_CLIENT_ID: ${{ secrets.OSINT_TWITCH_CLIENT_ID }}
+          OSINT_TWITCH_CLIENT_SECRET: ${{ secrets.OSINT_TWITCH_CLIENT_SECRET }}
+          OSINT_TWITCH_ACCESS_TOKEN: ${{ secrets.OSINT_TWITCH_ACCESS_TOKEN }}
+          OSINT_STEAM_API_KEY: ${{ secrets.OSINT_STEAM_API_KEY }}
+        run: >-
+          python scripts/provider_contract_smoke.py
+          --output provider-contract-report.json
+
+      - name: Upload contract report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-contract-report
+          path: provider-contract-report.json
+          if-no-files-found: error
+          retention-days: 30

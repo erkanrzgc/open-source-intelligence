@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
-
-import pytest
-
 import modules.profile_extract as profile_extract
 
 

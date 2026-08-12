@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
+from core.notify import telegram as telegram_module
+from core.notify import webhook as webhook_module
 from core.notify.base import Notification
 from core.notify.dispatcher import build_default_notifiers, notify_all
 from core.notify.telegram import TelegramNotifier
@@ -23,6 +27,24 @@ class _FakeNotifier:
             raise RuntimeError("boom")
         self.calls.append(notification)
         return not self.fail
+
+
+class _FakeHTTPClient:
+    response: tuple[int, dict | None, float] = (200, {}, 0.01)
+    calls: ClassVar[list[tuple[str, dict, dict | None]]] = []
+
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post_json(self, url, json_body, headers=None):
+        self.calls.append((url, json_body, headers))
+        return self.response
 
 
 def test_notification_to_dict_roundtrip():
@@ -111,3 +133,36 @@ def test_build_default_notifiers_empty_when_nothing_configured(monkeypatch):
     ):
         monkeypatch.delenv(var, raising=False)
     assert build_default_notifiers() == []
+
+
+@pytest.mark.asyncio
+async def test_webhook_send_uses_shared_http_client(monkeypatch):
+    _FakeHTTPClient.calls = []
+    _FakeHTTPClient.response = (204, None, 0.01)
+    monkeypatch.setattr(webhook_module, "HTTPClient", _FakeHTTPClient)
+    notification = Notification(
+        kind="scan_complete", username="alice", title="done", body="ok"
+    )
+    notifier = WebhookNotifier("https://hooks.example/notify", secret="shared")
+
+    assert await notifier.send(notification) is True
+    url, payload, headers = _FakeHTTPClient.calls[0]
+    assert url == "https://hooks.example/notify"
+    assert payload["username"] == "alice"
+    assert headers == {"Content-Type": "application/json", "X-OSINT-Secret": "shared"}
+
+
+@pytest.mark.asyncio
+async def test_telegram_send_uses_shared_http_client(monkeypatch):
+    _FakeHTTPClient.calls = []
+    _FakeHTTPClient.response = (200, {"ok": True}, 0.01)
+    monkeypatch.setattr(telegram_module, "HTTPClient", _FakeHTTPClient)
+    notification = Notification(
+        kind="scan_complete", username="alice", title="done", body="ok"
+    )
+
+    assert await TelegramNotifier("secret-token", "42").send(notification) is True
+    url, payload, headers = _FakeHTTPClient.calls[0]
+    assert url.endswith("/botsecret-token/sendMessage")
+    assert payload["chat_id"] == "42"
+    assert headers is None

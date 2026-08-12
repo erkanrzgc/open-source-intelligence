@@ -24,7 +24,7 @@ async def _safe(
 ) -> list[ReverseImageHit]:
     try:
         return await coro
-    except Exception as exc:  # noqa: BLE001 - reverse image is best-effort
+    except Exception as exc:
         log.debug("reverse image source %s failed: %s", name, exc)
         return []
 

@@ -44,8 +44,8 @@ import io
 import re
 import zipfile
 from dataclasses import replace
-from typing import Final
-from xml.etree import ElementTree as ET
+from typing import Any, Final
+from xml.etree import ElementTree as ET  # nosec B405
 
 from core.http_client import HTTPClient
 from core.logging_setup import get_logger
@@ -221,7 +221,13 @@ def _read_xml(z: zipfile.ZipFile, name: str) -> ET.Element | None:
     if name not in z.namelist():
         return None
     try:
-        return ET.fromstring(z.read(name))
+        raw = z.read(name)
+        # OOXML metadata never needs DTDs or custom entities. Reject them
+        # before the stdlib parser sees attacker-controlled document XML.
+        upper = raw.upper()
+        if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+            return None
+        return ET.fromstring(raw)  # nosec B314
     except ET.ParseError:
         return None
 
@@ -252,7 +258,7 @@ def _parse_pdf(data: bytes, *, url: str) -> DocumentMetadata | None:
         from pypdf.errors import PdfReadError
 
         reader = PdfReader(io.BytesIO(data))
-        info = reader.metadata or {}
+        info: dict[str, Any] = reader.metadata or {}
     except (PdfReadError, ValueError, OSError) as exc:
         log.debug("pdf parse failed for %s: %s", url, exc)
         return None

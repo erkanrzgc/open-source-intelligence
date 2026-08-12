@@ -15,10 +15,13 @@ both legally and operationally unsafe.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import logging
 import re
-from typing import Any
+from collections.abc import Coroutine
+from typing import Any, cast
 
 from core.analysis.llm import Backend, LLMAnalyzer, LLMUnavailable
 from modules.se_arsenal.models import PretextEmail
@@ -125,17 +128,33 @@ def generate_pretext(
         raise ValueError("target_email is required")
     if backend is None:
         analyzer = LLMAnalyzer.from_env()
-        backend = analyzer._backend  # type: ignore[assignment]  # noqa: SLF001
+        backend = analyzer._backend  # type: ignore[assignment]
     if backend is None:
         raise LLMUnavailable("no LLM backend available for pretext generation")
 
     user_prompt = _build_user_prompt(payload, target_email, scenario_hint)
-    raw = backend.complete(
+    completion: Any = backend.complete(
         _SYSTEM_PROMPT,
         user_prompt,
         max_tokens=max_tokens,
         temperature=temperature,
     )
+    raw: str
+    if inspect.isawaitable(completion):
+        coroutine = cast(Coroutine[Any, Any, str], completion)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            raw = asyncio.run(coroutine)
+        else:
+            coroutine.close()
+            raise LLMUnavailable(
+                "generate_pretext cannot block inside a running event loop"
+            )
+    else:
+        # Retain compatibility with third-party synchronous backends that
+        # pre-date the async Backend protocol.
+        raw = str(completion)
     data = _extract_json(raw)
     return PretextEmail(
         target_email=target_email,

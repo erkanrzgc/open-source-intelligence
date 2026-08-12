@@ -44,14 +44,14 @@ module that needs the wire goes through it — no module imports
 
 ```
 [0]  handle_resolve     — cfg.full_name resolves a real name → handle
-[1]  platform_check     — sweep 1924 platforms in parallel
+[1]  platform_check     — sweep 100 core platforms (up to 500 with full scope)
      └─ per platform: get → final-URL check → soft-404 cache lookup →
         liveness scoring → FP filter
 [1.5] profile_validate  — cfg.ai_skills: LLM verdict for borderline matches
 [2]  deep_scrape        — hand-curated API/HTML parsers for ~12 sites
-[3]  smart_search       — username variations + linked-account discovery
+[3]  smart_search       — ranked alias probes + identity-candidate resolution
 [4]  photo              — perceptual-hash avatar comparison (CPU-bound,
-                          offloaded via asyncio.to_thread)
+                          bounded worker executor with timeout/partial results)
 [5]  email_breach       — Gravatar → discover_emails → HIBP/XposedOrNot →
                           COMB → holehe → ghunt → toutatis
 [6]  web_presence       — Wayback + paste sites
@@ -76,9 +76,10 @@ module that needs the wire goes through it — no module imports
 [+]  enrichment         — stylometry + language + timezone + entity graph
 ```
 
-**Rule:** new phases append to `engine.py:run_scan`. They MUST be no-ops
-when their `cfg.<flag>` is False. They MUST NOT throw — failures get
-logged and swallowed so one bad source doesn't tank the whole scan.
+**Rule:** new phases are appended to `engine.py:_phase_registry` with an
+explicit enable predicate. Disabled phases are no-ops. The central runner
+records failures in diagnostics so one bad source does not tank the scan;
+`asyncio.CancelledError` must always propagate.
 
 ---
 
@@ -131,10 +132,11 @@ Currently shipped skills:
 |---|---|---|
 | `handle_generator.md` | `cfg.full_name`, `_phase_handle_resolve` | Suggest 15 culturally-aware username candidates from a real name. |
 | `profile_validator.md` | `cfg.ai_skills` + borderline confidence | Decide whether a borderline-scored profile belongs to the target. |
+| `exec_summary.md` | `cfg.ai_report` | Produce an optional structured investigator briefing. |
 
-The legacy "exec summary" prompt in `core/analysis/prompts.py` will
-migrate to a `exec_summary.md` skill in a future change; today it is
-called directly by `LLMAnalyzer.analyze()`.
+`LLMAnalyzer.analyze()` and the scan engine both route executive summaries
+through `exec_summary.md`; hand-written prompts are retained only as compacting
+helpers for backwards-compatible library callers.
 
 ### Adding a new skill
 
@@ -216,6 +218,8 @@ OSINT_LLM_BACKEND          ("http", "llama_cpp")
 OSINT_LLM_URL              (NVIDIA NIM by default)
 OSINT_LLM_MODEL
 OSINT_LLM_API_KEY
+OSINT_LLM_REVISION         (pinned Hugging Face commit for model downloads)
+OSINT_LLM_ALLOW_PRIVATE_NETWORKS (off; opt-in for local HTTP LLM servers)
 OSINT_LLM_CTX              (4096)
 OSINT_LLM_MAX_TOKENS       (768)
 OSINT_LLM_TEMPERATURE      (0.2)
@@ -223,6 +227,19 @@ OSINT_SKILL_CACHE          (~/.cache/open-source-intelligence/skills)
 OSINT_SKILL_CACHE_TTL      (86400)
 OSINT_SOFT404_CACHE        (~/.cache/open-source-intelligence/soft404)
 OSINT_PLATFORMS_FILE       (override modules/platforms.yaml)
+OSINT_WEBHOOK_ALLOW_PRIVATE_NETWORKS (off; opt-in for local webhook receivers)
+GITHUB_TOKEN              (optional authenticated GitHub profile lookup)
+OSINT_FOREM_API_KEY       (optional Forem/DEV API key)
+OSINT_REDDIT_BEARER_TOKEN (optional pre-minted Reddit OAuth access token)
+OSINT_REDDIT_CLIENT_ID    (Reddit application client id)
+OSINT_REDDIT_CLIENT_SECRET (Reddit client_credentials secret)
+OSINT_REDDIT_USER_AGENT   (required honest Reddit application identity)
+OSINT_X_BEARER_TOKEN      (X API v2 batch lookup)
+OSINT_YOUTUBE_API_KEY     (YouTube Data API v3)
+OSINT_TWITCH_CLIENT_ID
+OSINT_TWITCH_CLIENT_SECRET (Twitch client_credentials secret)
+OSINT_TWITCH_ACCESS_TOKEN (optional pre-minted app/user access token)
+OSINT_STEAM_API_KEY
 ```
 
 ---

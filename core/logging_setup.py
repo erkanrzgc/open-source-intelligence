@@ -8,8 +8,28 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 _CONFIGURED = False
+
+_LOG_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+"),
+    re.compile(r"(?i)((?:api[_-]?key|access[_-]?token|password|secret|token)\s*[:=]\s*)[^\s,;]+"),
+    re.compile(r"\b(?:ghp|gho|ghs|ghr)_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
+    re.compile(r"(?i)(/bot)[^/\s]+"),
+)
+
+
+class _RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        rendered = super().format(record)
+        for pattern in _LOG_SECRET_PATTERNS:
+            rendered = pattern.sub(
+                lambda match: (match.group(1) if match.lastindex else "") + "[REDACTED]",
+                rendered,
+            )
+        return rendered
 
 
 def configure_logging(level: str | None = None) -> None:
@@ -26,7 +46,7 @@ def configure_logging(level: str | None = None) -> None:
 
     handler = logging.StreamHandler()
     handler.setFormatter(
-        logging.Formatter(
+        _RedactingFormatter(
             fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             datefmt="%H:%M:%S",
         )

@@ -27,7 +27,7 @@ _DEFAULT_TIMEOUT = 120
 
 
 def _binary_path(binary: str | None = None) -> str | None:
-    configured = (binary or os.environ.get("OSINT_GITLEAKS_BIN", "")).strip()
+    configured = (binary or os.environ.get("OSINT_GITLEAKS_BIN") or "").strip()
     if configured:
         path = Path(configured).expanduser()
         if path.is_file():

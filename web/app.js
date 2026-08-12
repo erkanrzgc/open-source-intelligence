@@ -5,6 +5,10 @@ const scanLog = document.getElementById("scan-log");
 const scanProgress = document.getElementById("scan-progress");
 const scanProgressBar = document.getElementById("scan-progress-bar");
 const capabilityStatus = document.getElementById("capability-status");
+const verificationStatus = document.getElementById("verification-status");
+const identityCandidates = document.getElementById("identity-candidates");
+const categorySelect = document.getElementById("category-select");
+const phaseWarnings = document.getElementById("phase-warnings");
 const jobStatus = document.getElementById("job-status");
 const jobList = document.getElementById("job-list");
 const investigatorSummary = document.getElementById("investigator-summary");
@@ -55,6 +59,8 @@ function buildFormBody() {
   const fd = new FormData(scanForm);
   const body = {
     username: fd.get("username"),
+    smart: fd.get("smart") === "on",
+    platform_scope: fd.get("platform_scope") || "core",
     email: fd.get("email") === "on",
     breach: fd.get("breach") === "on",
     web: fd.get("web") === "on",
@@ -68,8 +74,8 @@ function buildFormBody() {
     past_usernames: fd.get("past_usernames") === "on",
     tor: fd.get("tor") === "on",
   };
-  const cats = (fd.get("categories") || "").toString().trim();
-  if (cats) body.categories = cats.split(",").map((s) => s.trim()).filter(Boolean);
+  const cats = fd.getAll("categories").map((value) => value.toString()).filter(Boolean);
+  if (cats.length) body.categories = cats;
   if (activeCaseId) body.case_id = activeCaseId;
   return body;
 }
@@ -136,6 +142,25 @@ function renderBriefList(target, items, formatter) {
 }
 
 function renderInvestigatorSummary(payload) {
+  const platforms = (payload && payload.platforms) || [];
+  const counts = { confirmed: 0, uncertain: 0, rejected: 0 };
+  for (const platform of platforms) {
+    const verdict = (platform.verification && platform.verification.verdict) ||
+      (platform.exists ? "confirmed" : "rejected");
+    if (verdict in counts) counts[verdict] += 1;
+  }
+  const totals = (payload && payload.verification_counts) || counts;
+  verificationStatus.textContent =
+    "confirmed " + totals.confirmed + " · uncertain " + totals.uncertain +
+    " · rejected " + totals.rejected;
+  phaseWarnings.innerHTML = "";
+  const diagnosticWarnings = (payload && payload.diagnostics && payload.diagnostics.warnings) || [];
+  for (const warning of [...((payload && payload.warnings) || []), ...diagnosticWarnings]) {
+    const item = document.createElement("li");
+    item.textContent = warning;
+    phaseWarnings.appendChild(item);
+  }
+  renderIdentityCandidates((payload && payload.identity_candidates) || []);
   const brief = payload && payload.investigator_summary;
   if (!brief) {
     investigatorSummary.classList.remove("show");
@@ -179,6 +204,56 @@ function renderInvestigatorSummary(payload) {
     });
     block.appendChild(list);
     briefActionsBySeverity.appendChild(block);
+  }
+}
+
+function renderIdentityCandidates(candidates) {
+  identityCandidates.innerHTML = "";
+  if (!candidates.length) return;
+  const heading = document.createElement("h3");
+  heading.textContent = "Similar usernames / Identity candidates";
+  identityCandidates.appendChild(heading);
+  const table = document.createElement("table");
+  const header = document.createElement("tr");
+  for (const label of ["Handle", "Platforms", "Verdict", "Score", "Evidence"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    header.appendChild(th);
+  }
+  table.appendChild(header);
+  for (const candidate of candidates) {
+    const row = document.createElement("tr");
+    const values = [
+      candidate.username || "",
+      (candidate.profiles || []).map((profile) => profile.platform).join(", "),
+      (candidate.verdict || "uncertain").replaceAll("_", " "),
+      Number(candidate.score || 0).toFixed(2),
+      (candidate.evidence || []).slice(0, 3).map((item) => item.detail).join("; "),
+    ];
+    for (const value of values) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    table.appendChild(row);
+  }
+  identityCandidates.appendChild(table);
+}
+
+async function refreshPlatformCatalog() {
+  try {
+    const response = await fetch("/platforms");
+    if (!response.ok) return;
+    const catalog = await response.json();
+    categorySelect.innerHTML = "";
+    for (const category of catalog.categories || []) {
+      const option = document.createElement("option");
+      option.value = category.value;
+      option.textContent = category.label + " (" + category.core_count + "/" + category.full_count + ")";
+      categorySelect.appendChild(option);
+    }
+  } catch (err) {
+    console.error("platform catalog fetch failed", err);
   }
 }
 
@@ -315,10 +390,14 @@ async function refreshCapabilities() {
     const degraded = Object.entries(caps)
       .filter(([, meta]) => meta && meta.available && !meta.ready)
       .map(([name]) => name);
+    const missing = Object.entries(caps)
+      .filter(([, meta]) => !meta || !meta.available)
+      .map(([name]) => name);
     capabilityStatus.textContent =
       "schema " + data.schema_version +
       " · ready: " + ready.slice(0, 6).join(", ") +
-      (degraded.length ? " · partial: " + degraded.slice(0, 4).join(", ") : "");
+      (degraded.length ? " · partial: " + degraded.slice(0, 4).join(", ") : "") +
+      (missing.length ? " · unavailable: " + missing.slice(0, 6).join(", ") : "");
   } catch (err) {
     capabilityStatus.textContent = "capabilities fetch error: " + err.message;
   }
@@ -1125,6 +1204,7 @@ historyForm.addEventListener("submit", (ev) => {
 refreshCases();
 refreshWatchlist();
 refreshCapabilities();
+refreshPlatformCatalog();
 refreshJobs();
 updateScanCaseTarget();
 

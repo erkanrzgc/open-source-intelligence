@@ -14,11 +14,18 @@ from pathlib import Path
 from core.analysis.llm import (
     DEFAULT_CACHE_DIR,
     DEFAULT_MODEL_FILE,
+    DEFAULT_MODEL_REVISION,
     DEFAULT_REPO_ID,
 )
 
 
-def download(repo_id: str, filename: str, dest_dir: Path) -> Path:
+def download(
+    repo_id: str,
+    filename: str,
+    dest_dir: Path,
+    *,
+    revision: str = DEFAULT_MODEL_REVISION,
+) -> Path:
     try:
         from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
     except ImportError as exc:
@@ -31,6 +38,7 @@ def download(repo_id: str, filename: str, dest_dir: Path) -> Path:
         repo_id=repo_id,
         filename=filename,
         local_dir=str(dest_dir),
+        revision=revision,
     )
     return Path(path)
 
@@ -40,11 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=DEFAULT_REPO_ID, help="HF repo id")
     parser.add_argument("--file", default=DEFAULT_MODEL_FILE, help="GGUF filename")
     parser.add_argument(
+        "--revision",
+        default=DEFAULT_MODEL_REVISION,
+        help="immutable Hugging Face commit revision",
+    )
+    parser.add_argument(
         "--dest", type=Path, default=DEFAULT_CACHE_DIR, help="Destination directory"
     )
     args = parser.parse_args(argv)
     try:
-        path = download(args.repo, args.file, args.dest)
+        path = download(args.repo, args.file, args.dest, revision=args.revision)
     except ImportError as exc:
         print(str(exc), file=sys.stderr)
         return 1

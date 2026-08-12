@@ -117,6 +117,28 @@ def payload_to_cytoscape(payload: dict[str, Any]) -> dict[str, list[dict[str, An
             {"data": {"source": username, "target": aid, "relation": "was_known_as"}}
         )
 
+    for candidate in payload.get("identity_candidates", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        alias = candidate.get("username", "")
+        if not alias:
+            continue
+        aid = f"alias::{alias}"
+        nodes.append(
+            {
+                "data": {
+                    "id": aid,
+                    "label": alias,
+                    "kind": "alias",
+                    "verdict": candidate.get("verdict", "uncertain"),
+                    "score": candidate.get("score", 0.0),
+                }
+            }
+        )
+        edges.append(
+            {"data": {"source": username, "target": aid, "relation": "identity_candidate"}}
+        )
+
     # Dedupe nodes by id — a breach can repeat across emails.
     # Dedupe edges by (source, target, relation) tuple.
     seen: set[str] = set()

@@ -26,6 +26,8 @@ if Path(fastapi_mod.__file__).as_posix().startswith("/usr/lib/python3/dist-packa
 
 
 class ASGITestClient:
+    __test__ = False
+
     def __init__(self, app):
         self.app = app
 
@@ -124,6 +126,16 @@ def test_health(client: TestClient) -> None:
     assert r.json()["status"] == "ok"
 
 
+def test_platform_catalog_contract(client: TestClient) -> None:
+    response = client.get("/platforms")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["core_count"] == 100
+    assert payload["full_count"] <= 500
+    assert any(row["value"] == "content" for row in payload["categories"])
+    assert sum(row["alias_probe"] for row in payload["platforms"]) == 15
+
+
 def test_openapi_uses_project_name(client: TestClient) -> None:
     r = client.get("/openapi.json")
     assert r.status_code == 200
@@ -150,6 +162,18 @@ def test_scan_endpoint_returns_payload(client: TestClient) -> None:
 def test_scan_rejects_empty_username(client: TestClient) -> None:
     r = client.post("/scan", json={"username": "", "save_history": False})
     assert r.status_code == 422
+
+
+def test_scan_rejects_alias_candidate_limit_above_24(client: TestClient) -> None:
+    response = client.post(
+        "/scan",
+        json={
+            "username": "alice",
+            "alias_max_candidates": 25,
+            "save_history": False,
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_scan_request_maps_advanced_config_fields() -> None:

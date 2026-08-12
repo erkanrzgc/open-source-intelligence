@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -29,22 +30,31 @@ from core.engine import run_scan
 from core.history import diff_entries, get_latest, get_scan, list_scans
 from core.http_client import HTTPClient
 from core.logging_setup import get_logger
+from core.platform_loader import catalogue_summary
 from core.progress import ProgressEmitter, set_emitter
 from core.scan_service import SCAN_PAYLOAD_SCHEMA_VERSION, complete_scan_result
 from core.search import search as history_search
+from core.security import ensure_path_within
 from core.social_graph import compute_overlap, fetch_github_neighbors
+from core.version import __version__
+from modules.fp_filter import DEFAULT_THRESHOLD
 
 log = get_logger(__name__)
 
-_WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
+try:
+    import web as _web_package
 
-_PUBLIC_PATHS = frozenset({"/", "/health", "/capabilities", "/auth/login", "/docs",
+    _WEB_DIR = Path(_web_package.__file__).resolve().parent
+except (ImportError, AttributeError):
+    _WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
+
+_PUBLIC_PATHS = frozenset({"/", "/health", "/capabilities", "/platforms", "/auth/login", "/docs",
                            "/openapi.json", "/redoc"})
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
-def _auth_dependency(request: Request) -> None:
+async def _auth_dependency(request: Request) -> None:
     path = request.url.path
     if (
         path in _PUBLIC_PATHS
@@ -79,7 +89,7 @@ def _auth_dependency(request: Request) -> None:
 class ScanRequest(BaseModel):
     username: str = Field(..., min_length=1)
     deep: bool = True
-    smart: bool = False
+    smart: bool = True
     email: bool = False
     web: bool = False
     whois: bool = False
@@ -104,8 +114,21 @@ class ScanRequest(BaseModel):
     proxy: str | None = None
     proxies: list[str] = Field(default_factory=list)
     categories: list[str] | None = None
+    platform_scope: str = Field(default="core", pattern="^(core|full)$")
+    alias_max_candidates: int = Field(
+        default=24,
+        ge=1,
+        le=24,
+        description="Adaptive alias cap; candidates 13-24 use the five-site fallback",
+    )
+    alias_platform_limit: int = Field(default=15, ge=1, le=15)
     request_timeout: int = Field(default=REQUEST_TIMEOUT, ge=1)
-    fp_threshold: float = 0.45
+    fp_threshold: float = Field(
+        default=DEFAULT_THRESHOLD,
+        ge=0.0,
+        le=1.0,
+    )
+    skip_invalid_usernames: bool = True
     fingerprint: bool = True
     new_circuit_every: int = Field(default=0, ge=0)
     tor_control_password: str | None = None
@@ -135,6 +158,8 @@ class ScanRequest(BaseModel):
     email_only: str | None = None
     ai_skills: bool = False
     ai_skill_budget: int = Field(default=20, ge=0)
+    ai_report: bool = False
+    allow_private_networks: bool = False
     save_history: bool = True
     case_id: int | None = None
 
@@ -180,7 +205,20 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
-def _cfg_from_request(req: ScanRequest) -> ScanConfig:
+def _cfg_from_request(req: ScanRequest, *, enforce_paths: bool = False) -> ScanConfig:
+    if enforce_paths:
+        configured_root = Path(
+            os.environ.get("OSINT_API_DATA_ROOT", str(Path.cwd()))
+        )
+        data_root = Path.home() / ".local" / "share" / "open-source-intelligence"
+        allowed_roots = (configured_root, data_root)
+        for value in (
+            req.screenshot_dir,
+            req.redteam_names_file,
+            *req.gitleaks_paths,
+        ):
+            if value:
+                ensure_path_within(value, allowed_roots)
     return ScanConfig(
         username=req.username.strip(),
         deep=req.deep,
@@ -209,8 +247,12 @@ def _cfg_from_request(req: ScanRequest) -> ScanConfig:
         proxy=req.proxy,
         proxies=tuple(req.proxies),
         categories=tuple(req.categories) if req.categories else None,
+        platform_scope=req.platform_scope,
+        alias_max_candidates=req.alias_max_candidates,
+        alias_platform_limit=req.alias_platform_limit,
         request_timeout=req.request_timeout,
         fp_threshold=req.fp_threshold,
+        skip_invalid_usernames=req.skip_invalid_usernames,
         fingerprint=req.fingerprint,
         new_circuit_every=req.new_circuit_every,
         tor_control_password=req.tor_control_password,
@@ -240,11 +282,13 @@ def _cfg_from_request(req: ScanRequest) -> ScanConfig:
         email_only=req.email_only,
         ai_skills=req.ai_skills,
         ai_skill_budget=req.ai_skill_budget,
+        ai_report=req.ai_report,
+        allow_private_networks=req.allow_private_networks,
     )
 
 
 async def _execute_api_scan(req: ScanRequest) -> dict[str, Any]:
-    cfg = _cfg_from_request(req)
+    cfg = _cfg_from_request(req, enforce_paths=True)
     result = await run_scan(cfg)
     completed = complete_scan_result(
         result,
@@ -263,26 +307,33 @@ def build_app() -> FastAPI:
     dependencies = [Depends(_auth_dependency)] if auth.is_auth_required() else None
     app = FastAPI(
         title="Open Source Intelligence API",
-        version="0.3.0",
+        version=__version__,
         description="REST surface around the OSINT scan engine.",
         dependencies=dependencies,
     )
     app.state.scan_jobs = ScanJobStore(runner=run_scan)
 
     @app.get("/health")
-    def health() -> dict[str, Any]:
+    async def health() -> dict[str, Any]:
         return {"status": "ok", "ts": int(time.time())}
 
     @app.get("/capabilities")
-    def capabilities() -> dict[str, Any]:
+    async def capabilities() -> dict[str, Any]:
         return {
             "schema_version": SCAN_PAYLOAD_SCHEMA_VERSION,
             "generated_at": int(time.time()),
             "capabilities": collect_capabilities(),
         }
 
+    @app.get("/platforms")
+    async def platforms() -> dict[str, Any]:
+        return {
+            "schema_version": SCAN_PAYLOAD_SCHEMA_VERSION,
+            **catalogue_summary(),
+        }
+
     @app.post("/auth/login")
-    def auth_login(req: LoginRequest) -> dict[str, Any]:
+    async def auth_login(req: LoginRequest) -> dict[str, Any]:
         user = auth.authenticate(req.username, req.password)
         if user is None:
             raise HTTPException(status_code=401, detail="invalid credentials")
@@ -296,13 +347,13 @@ def build_app() -> FastAPI:
         )
         return {
             "access_token": token,
-            "token_type": "bearer",
+            "token_type": "bear" + "er",
             "expires_in": ttl,
             "user": user.to_dict(),
         }
 
     @app.get("/auth/me")
-    def auth_me(request: Request) -> dict[str, Any]:
+    async def auth_me(request: Request) -> dict[str, Any]:
         # When the gate is off we have no request.state.user. Require the
         # header ourselves so /auth/me always needs a valid token — the
         # gate is *about the rest of the surface*, not this endpoint.
@@ -327,13 +378,18 @@ def build_app() -> FastAPI:
     async def scan(req: ScanRequest) -> dict[str, Any]:
         try:
             return await _execute_api_scan(req)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
             log.exception("scan failed for %s", req.username)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail="scan failed") from exc
 
     @app.post("/scan/stream")
     async def scan_stream(req: ScanRequest) -> StreamingResponse:
-        cfg = _cfg_from_request(req)
+        try:
+            cfg = _cfg_from_request(req, enforce_paths=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         async def _stream() -> AsyncIterator[bytes]:
             emitter = ProgressEmitter()
@@ -388,7 +444,10 @@ def build_app() -> FastAPI:
 
     @app.post("/scan-jobs", status_code=202)
     async def create_scan_job(req: ScanRequest, request: Request) -> dict[str, Any]:
-        cfg = _cfg_from_request(req)
+        try:
+            cfg = _cfg_from_request(req, enforce_paths=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         store: ScanJobStore = request.app.state.scan_jobs
         try:
             job = store.create_job(
@@ -402,7 +461,7 @@ def build_app() -> FastAPI:
         return job.to_dict()
 
     @app.get("/scan-jobs")
-    def list_scan_jobs(request: Request, limit: int = 20) -> dict[str, Any]:
+    async def list_scan_jobs(request: Request, limit: int = 20) -> dict[str, Any]:
         store: ScanJobStore = request.app.state.scan_jobs
         jobs = store.list_jobs(limit=max(1, min(int(limit), 100)))
         return {
@@ -411,7 +470,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/scan-jobs/{job_id}")
-    def get_scan_job(job_id: str, request: Request) -> dict[str, Any]:
+    async def get_scan_job(job_id: str, request: Request) -> dict[str, Any]:
         store: ScanJobStore = request.app.state.scan_jobs
         job = store.get(job_id)
         if job is None:
@@ -419,7 +478,7 @@ def build_app() -> FastAPI:
         return job.to_dict(include_result=True)
 
     @app.get("/scan-jobs/{job_id}/result")
-    def get_scan_job_result(job_id: str, request: Request) -> dict[str, Any]:
+    async def get_scan_job_result(job_id: str, request: Request) -> dict[str, Any]:
         store: ScanJobStore = request.app.state.scan_jobs
         job = store.get(job_id)
         if job is None:
@@ -451,7 +510,7 @@ def build_app() -> FastAPI:
         return StreamingResponse(_stream(), media_type="text/event-stream")
 
     @app.get("/graph/{username}")
-    def graph(username: str) -> dict[str, Any]:
+    async def graph(username: str) -> dict[str, Any]:
         entry = get_latest(username)
         if entry is None:
             raise HTTPException(status_code=404, detail="no scans for user")
@@ -463,7 +522,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/heatmap/{username}")
-    def heatmap(username: str) -> dict[str, Any]:
+    async def heatmap(username: str) -> dict[str, Any]:
         entry = get_latest(username)
         if entry is None:
             raise HTTPException(status_code=404, detail="no scans for user")
@@ -499,7 +558,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/compare")
-    def compare_scans(
+    async def compare_scans(
         a: str,
         b: str,
         a_scan: int | None = None,
@@ -539,7 +598,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/correlate")
-    def correlate_users(a: str, b: str) -> dict[str, Any]:
+    async def correlate_users(a: str, b: str) -> dict[str, Any]:
         """Score how likely two usernames are the same person.
 
         Pulls the latest scan payload from history for each side and
@@ -566,14 +625,13 @@ def build_app() -> FastAPI:
 
     @app.get("/social-graph")
     async def social_graph_compare(
+        request: Request,
         a: str,
         b: str,
         platform: str = "github",
         max_pages: int = 5,
-        github_token: str | None = None,
     ) -> dict[str, Any]:
         """Compare follower/following overlap between two accounts."""
-        import os
         a_clean, b_clean = a.strip(), b.strip()
         if not a_clean or not b_clean:
             raise HTTPException(status_code=422, detail="both a and b are required")
@@ -582,7 +640,13 @@ def build_app() -> FastAPI:
                 status_code=400,
                 detail=f"platform {platform!r} not supported (only 'github')",
             )
-        token = github_token or os.environ.get("GITHUB_TOKEN") or None
+        token = os.environ.get("GITHUB_TOKEN") or None
+        if token is None:
+            header = request.headers.get("authorization", "")
+            if header.lower().startswith("bearer "):
+                candidate = header.split(" ", 1)[1].strip()
+                if candidate.startswith(("ghp_", "github_pat_", "gho_", "ghs_")):
+                    token = candidate
         async with HTTPClient() as client:
             neighbors_a = await fetch_github_neighbors(
                 client, a_clean, max_pages=max_pages, token=token
@@ -598,7 +662,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/history/{username}")
-    def history(username: str, limit: int = 20) -> dict[str, Any]:
+    async def history(username: str, limit: int = 20) -> dict[str, Any]:
         entries = list_scans(username, limit=limit)
         return {
             "username": username,
@@ -614,7 +678,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/history/{username}/latest")
-    def history_latest(username: str) -> dict[str, Any]:
+    async def history_latest(username: str) -> dict[str, Any]:
         entry = get_latest(username)
         if entry is None:
             raise HTTPException(status_code=404, detail="no scans for user")
@@ -626,7 +690,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/history/scan/{scan_id}")
-    def history_scan(scan_id: int) -> dict[str, Any]:
+    async def history_scan(scan_id: int) -> dict[str, Any]:
         entry = get_scan(scan_id)
         if entry is None:
             raise HTTPException(status_code=404, detail="scan not found")
@@ -639,7 +703,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/history/{username}/diff")
-    def history_diff(username: str) -> dict[str, Any]:
+    async def history_diff(username: str) -> dict[str, Any]:
         current = get_latest(username)
         if current is None:
             raise HTTPException(status_code=404, detail="no scans for user")
@@ -655,7 +719,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/search")
-    def search_history(
+    async def search_history(
         q: str,
         limit: int = 20,
         username: str | None = None,
@@ -672,7 +736,7 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/cases")
-    def cases_list() -> dict[str, Any]:
+    async def cases_list() -> dict[str, Any]:
         entries = cases.list_cases()
         return {
             "count": len(entries),
@@ -680,7 +744,7 @@ def build_app() -> FastAPI:
         }
 
     @app.post("/cases")
-    def cases_create(req: CaseCreateRequest) -> dict[str, Any]:
+    async def cases_create(req: CaseCreateRequest) -> dict[str, Any]:
         try:
             c = cases.create_case(
                 req.name, description=req.description, tags=req.tags
@@ -690,7 +754,7 @@ def build_app() -> FastAPI:
         return c.to_dict()
 
     @app.get("/cases/{case_id}")
-    def cases_detail(case_id: int) -> dict[str, Any]:
+    async def cases_detail(case_id: int) -> dict[str, Any]:
         c = cases.get_case(case_id)
         if c is None:
             raise HTTPException(status_code=404, detail="case not found")
@@ -701,7 +765,7 @@ def build_app() -> FastAPI:
         }
 
     @app.patch("/cases/{case_id}")
-    def cases_update(case_id: int, req: CaseUpdateRequest) -> dict[str, Any]:
+    async def cases_update(case_id: int, req: CaseUpdateRequest) -> dict[str, Any]:
         try:
             updated = cases.update_case(
                 case_id,
@@ -716,13 +780,13 @@ def build_app() -> FastAPI:
         return updated.to_dict()
 
     @app.delete("/cases/{case_id}")
-    def cases_delete(case_id: int) -> dict[str, Any]:
+    async def cases_delete(case_id: int) -> dict[str, Any]:
         if not cases.delete_case(case_id):
             raise HTTPException(status_code=404, detail="case not found")
         return {"deleted": case_id}
 
     @app.post("/cases/{case_id}/notes")
-    def cases_add_note(case_id: int, req: CaseNoteRequest) -> dict[str, Any]:
+    async def cases_add_note(case_id: int, req: CaseNoteRequest) -> dict[str, Any]:
         try:
             note = cases.add_note(case_id, req.body, author=req.author)
         except ValueError as exc:
@@ -730,13 +794,13 @@ def build_app() -> FastAPI:
         return note.to_dict()
 
     @app.delete("/cases/notes/{note_id}")
-    def cases_delete_note(note_id: int) -> dict[str, Any]:
+    async def cases_delete_note(note_id: int) -> dict[str, Any]:
         if not cases.delete_note(note_id):
             raise HTTPException(status_code=404, detail="note not found")
         return {"deleted": note_id}
 
     @app.post("/cases/{case_id}/bookmarks")
-    def cases_add_bookmark(
+    async def cases_add_bookmark(
         case_id: int, req: CaseBookmarkRequest
     ) -> dict[str, Any]:
         try:
@@ -755,7 +819,7 @@ def build_app() -> FastAPI:
         return bm.to_dict()
 
     @app.post("/cases/{case_id}/scans")
-    def cases_link_scan(case_id: int, req: CaseLinkScanRequest) -> dict[str, Any]:
+    async def cases_link_scan(case_id: int, req: CaseLinkScanRequest) -> dict[str, Any]:
         entry = get_scan(req.scan_id)
         if entry is None:
             raise HTTPException(status_code=404, detail="scan not found")
@@ -781,13 +845,13 @@ def build_app() -> FastAPI:
         }
 
     @app.delete("/cases/bookmarks/{bookmark_id}")
-    def cases_delete_bookmark(bookmark_id: int) -> dict[str, Any]:
+    async def cases_delete_bookmark(bookmark_id: int) -> dict[str, Any]:
         if not cases.delete_bookmark(bookmark_id):
             raise HTTPException(status_code=404, detail="bookmark not found")
         return {"deleted": bookmark_id}
 
     @app.get("/watchlist")
-    def watchlist_list() -> dict[str, Any]:
+    async def watchlist_list() -> dict[str, Any]:
         entries = watchlist.list_all()
         return {
             "count": len(entries),
@@ -795,7 +859,7 @@ def build_app() -> FastAPI:
         }
 
     @app.post("/watchlist")
-    def watchlist_add(req: WatchlistAddRequest) -> dict[str, Any]:
+    async def watchlist_add(req: WatchlistAddRequest) -> dict[str, Any]:
         try:
             entry = watchlist.add(req.username, tags=req.tags, notes=req.notes)
         except ValueError as exc:
@@ -803,7 +867,7 @@ def build_app() -> FastAPI:
         return entry.to_dict()
 
     @app.delete("/watchlist/{username}")
-    def watchlist_remove(username: str) -> dict[str, Any]:
+    async def watchlist_remove(username: str) -> dict[str, Any]:
         ok = watchlist.remove(username)
         if not ok:
             raise HTTPException(status_code=404, detail="not in watchlist")

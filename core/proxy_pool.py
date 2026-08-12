@@ -23,7 +23,7 @@ class ProxyPool:
     _failures: dict[str, int] = field(default_factory=dict)
     _dead: set[str] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
-    _cycle: "itertools.cycle[str] | None" = None
+    _cycle: itertools.cycle[str] | None = None
 
     def __post_init__(self) -> None:
         self.proxies = tuple(p for p in self.proxies if p)

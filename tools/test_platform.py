@@ -7,8 +7,12 @@ Usage:
 Fetches the platform URL and prints unique markers so you can find
 good presence/absence strings.
 """
-import aiohttp, asyncio, sys
+import asyncio
+import re
+import sys
 from pathlib import Path
+
+import aiohttp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -30,7 +34,7 @@ async def main(platform_name: str, username: str):
     print(f"Platform: {platform.name}")
     print(f"URL:      {url}")
     print(f"Category: {platform.category}")
-    print(f"Current detection:")
+    print("Current detection:")
     print(f"  check_type: {platform.check_type}")
     print(f"  absence:    {list(platform.absence_strings)[:5]}")
     print(f"  presence:   {list(platform.presence_strings)[:5]}")
@@ -39,7 +43,7 @@ async def main(platform_name: str, username: str):
     print()
 
     async with aiohttp.ClientSession() as s:
-        print(f"Fetching... (may include JS-wall redirects)")
+        print("Fetching... (may include JS-wall redirects)")
         async with s.get(url, timeout=15, headers=headers, allow_redirects=True) as r:
             body = await r.text()
             print(f"HTTP: {r.status}  final_url: {str(r.url)[:100]}  length: {len(body)}")
@@ -63,8 +67,6 @@ async def main(platform_name: str, username: str):
             print()
 
             # Auto-suggest markers
-            import json, re
-
             # Look for JSON containing the username
             json_snippets = re.findall(r'\{[^{}]*?"?\w*"?\s*:\s*"[^"]*\b' + re.escape(username) + r'\b[^"]*"[^{}]*?\}', body)
             if json_snippets:
@@ -75,7 +77,7 @@ async def main(platform_name: str, username: str):
             # Look for error patterns on non-existent user page
             error_patterns = re.findall(r'(?i)(not found|doesn.t exist|page not found|error 404|no such user|user not found|profile not found)', body)
             if error_patterns:
-                print(f"\n--- ERROR PATTERNS ---")
+                print("\n--- ERROR PATTERNS ---")
                 for ep in set(error_patterns[:5]):
                     print(f"  {ep}")
 
@@ -84,7 +86,7 @@ async def main(platform_name: str, username: str):
             text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
             text = re.sub(r"<[^>]+>", " ", text)
             text = re.sub(r"\s+", " ", text).strip()
-            print(f"\n--- TEXT CONTENT (first 800 chars) ---")
+            print("\n--- TEXT CONTENT (first 800 chars) ---")
             print(text[:800])
 
     return 0

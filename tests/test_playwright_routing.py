@@ -55,6 +55,12 @@ def test_should_render_true_for_plain_when_forced(monkeypatch):
     assert _should_render(PLAIN, cfg) is True
 
 
+def test_should_render_respects_no_auto_render_for_js_heavy(monkeypatch):
+    monkeypatch.setattr(engine_mod, "PLAYWRIGHT_AVAILABLE", True)
+    cfg = ScanConfig(username="alice", no_auto_render=True)
+    assert _should_render(JS_HEAVY, cfg) is False
+
+
 def test_should_render_skips_json_api(monkeypatch):
     monkeypatch.setattr(engine_mod, "PLAYWRIGHT_AVAILABLE", True)
     cfg = ScanConfig(username="alice", playwright=True)
@@ -204,3 +210,38 @@ def test_rendered_page_exposes_screenshot_path():
 def test_slugify_sanitises_unsafe_chars():
     assert pw_mod._slugify("Twitter / X") == "Twitter_X"
     assert pw_mod._slugify("") == "page"
+
+
+@pytest.mark.asyncio
+async def test_short_body_browser_recheck_uses_score_contract(monkeypatch):
+    """Regression: the rendered re-score used obsolete score_match kwargs."""
+    monkeypatch.setattr(engine_mod, "PLAYWRIGHT_AVAILABLE", True)
+    platform = Platform(
+        name="ShortProfile",
+        url="https://profiles.example/{username}",
+        category="social",
+        check_type="content_absent",
+        absence_strings=("profile not found",),
+    )
+
+    class _Client:
+        async def get_with_meta(self, url, headers=None):
+            return 200, "<html><body>alice</body></html>", 0.01, url
+
+    rendered_body = (
+        "<html><head><title>alice profile</title>"
+        '<link rel="canonical" href="https://profiles.example/alice">'
+        "</head><body><h1>alice</h1><img class='avatar' src='/alice.jpg'>"
+        "<p>Bio: active researcher with 42 posts.</p>" + (" activity" * 80) + "</body></html>"
+    )
+
+    async def fake_fetch(url, **kwargs):
+        return pw_mod.RenderedPage(url=url, status=200, html=rendered_body, final_url=url)
+
+    monkeypatch.setattr(engine_mod, "fetch_rendered", fake_fetch)
+    result = await _check_platform(_Client(), ScanConfig(username="alice"), platform)
+
+    assert result.rendered is True
+    assert result.exists is True
+    assert "pw_rescore" in result.fp_signals
+    assert result.confidence >= 0.45

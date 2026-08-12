@@ -46,14 +46,9 @@ from typing import Any
 import yaml
 
 from core.analysis.llm import (
-    DEFAULT_HTTP_API_KEY,
-    DEFAULT_HTTP_MODEL,
-    DEFAULT_HTTP_TIMEOUT,
-    DEFAULT_HTTP_URL,
     Backend,
-    HttpBackend,
-    LLMUnavailable,
     LLMAnalyzer,
+    LLMUnavailable,
     parse_report,  # noqa: F401  (re-exported for convenience)
 )
 
@@ -189,7 +184,8 @@ def _cache_get(skill: Skill, inputs: dict[str, Any]) -> dict[str, Any] | None:
     recorded = float(data.get("_recorded_at", 0))
     if time.time() - recorded > CACHE_TTL_SECONDS:
         return None
-    return data.get("payload")
+    payload = data.get("payload")
+    return payload if isinstance(payload, dict) else None
 
 
 def _cache_put(skill: Skill, inputs: dict[str, Any], output: dict[str, Any]) -> None:
@@ -314,7 +310,7 @@ def _validate_against_schema(payload: dict[str, Any], schema: dict[str, Any]) ->
         type_ok = {
             "string": isinstance(value, str),
             "integer": isinstance(value, int) and not isinstance(value, bool),
-            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+            "number": isinstance(value, int | float) and not isinstance(value, bool),
             "boolean": isinstance(value, bool),
             "array": isinstance(value, list),
             "object": isinstance(value, dict),
@@ -328,9 +324,12 @@ def _validate_against_schema(payload: dict[str, Any], schema: dict[str, Any]) ->
 
 def _default_backend() -> Backend:
     try:
-        return LLMAnalyzer.from_env()._backend
+        backend = LLMAnalyzer.from_env()._backend
     except LLMUnavailable as exc:
         raise SkillError(f"no LLM backend available: {exc}") from exc
+    if backend is None:
+        raise SkillError("no LLM backend available")
+    return backend
 
 
 async def run_skill(
@@ -374,7 +373,9 @@ async def run_skill(
             timeout=SKILL_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
-        raise SkillError(f"skill {name!r} timed out after {SKILL_TIMEOUT_SECONDS}s")
+        raise SkillError(
+            f"skill {name!r} timed out after {SKILL_TIMEOUT_SECONDS}s"
+        ) from None
     except LLMUnavailable as exc:
         raise SkillError(f"backend failed for skill {name!r}: {exc}") from exc
 

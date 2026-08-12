@@ -79,6 +79,30 @@ def _profile_sections(data: dict) -> str:
     return sections or '<p class="muted">No deep profile data.</p>'
 
 
+def _identity_candidates_block(data: dict) -> str:
+    candidates = data.get("identity_candidates") or []
+    if not candidates:
+        return ""
+    rows = "".join(
+        f"""
+        <tr>
+            <td>{escape(str(candidate.get('username', '')))}</td>
+            <td>{_fmt([profile.get('platform', '') for profile in candidate.get('profiles', [])])}</td>
+            <td>{escape(str(candidate.get('verdict', 'uncertain')))}</td>
+            <td>{escape(str(candidate.get('score', 0)))}</td>
+            <td>{_fmt([item.get('detail', '') for item in candidate.get('evidence', [])])}</td>
+        </tr>"""
+        for candidate in candidates
+        if isinstance(candidate, dict)
+    )
+    return f"""
+    <h2>Similar Usernames / Identity Candidates</h2>
+    <table>
+        <tr><th>Handle</th><th>Platforms</th><th>Verdict</th><th>Score</th><th>Evidence</th></tr>
+        {rows}
+    </table>"""
+
+
 def _cross_reference_block(data: dict) -> str:
     cr = data["cross_reference"]
     return f"""
@@ -553,6 +577,7 @@ def render_html(data: dict) -> str:
 
     {_investigator_brief_block(data)}
     {_platforms_table(data)}
+    {_identity_candidates_block(data)}
 
     <h2>Profile Details</h2>
     {_profile_sections(data)}

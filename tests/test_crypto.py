@@ -12,7 +12,6 @@ from modules.crypto import bitcoin, ethereum, lookup_crypto
 from modules.crypto.models import CryptoIntel
 from modules.crypto.validators import classify
 
-
 # ── Validators ──────────────────────────────────────────────────────
 
 
@@ -122,8 +121,9 @@ async def test_ethereum_lookup_parses_balance_and_txs(monkeypatch) -> None:
 
     def callback(url, **kwargs):
         call_count["n"] += 1
-        from aioresponses.core import CallbackResult
         import json
+
+        from aioresponses.core import CallbackResult
 
         if "action=balance" in str(url):
             return CallbackResult(status=200, body=json.dumps(bal_payload),

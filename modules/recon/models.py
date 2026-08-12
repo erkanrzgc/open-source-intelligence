@@ -6,6 +6,7 @@ can serialize it uniformly.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 
@@ -250,12 +251,17 @@ class LeakedSecret:
     metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        fingerprint = hashlib.sha256(self.value.encode("utf-8", "replace")).hexdigest()
+        suffix = self.value[-4:] if len(self.value) >= 4 else ""
+        safe_preview = f"[REDACTED …{suffix}]" if suffix else "[REDACTED]"
+        safe_snippet = self.snippet.replace(self.value, "[REDACTED]") if self.value else self.snippet
         return {
             "rule_id": self.rule_id,
-            "value": self.value,
+            "fingerprint": fingerprint,
+            "safe_preview": safe_preview,
             "repo": self.repo,
             "file_path": self.file_path,
             "url": self.url,
-            "snippet": self.snippet,
+            "snippet": safe_snippet,
             "metadata": dict(self.metadata),
         }

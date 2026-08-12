@@ -198,7 +198,8 @@ def create_case(
         raise ValueError(f"case {clean!r} already exists") from exc
     finally:
         conn.close()
-    assert case_id is not None
+    if case_id is None:
+        raise RuntimeError("database did not return a case id")
     return Case(
         id=case_id,
         name=clean,
@@ -328,7 +329,8 @@ def add_note(
         note_id = cur.lastrowid
     finally:
         conn.close()
-    assert note_id is not None
+    if note_id is None:
+        raise RuntimeError("database did not return a note id")
     return CaseNote(
         id=note_id,
         case_id=case_id,
@@ -415,7 +417,8 @@ def add_bookmark(
         bm_id = cur.lastrowid
     finally:
         conn.close()
-    assert bm_id is not None
+    if bm_id is None:
+        raise RuntimeError("database did not return a bookmark id")
     return CaseBookmark(
         id=bm_id,
         case_id=case_id,

@@ -107,6 +107,34 @@ def build_entity_graph(result: Any) -> nx.DiGraph:
         )
         g.add_edge(root, node_id, relation="was_known_as")
 
+    for candidate in getattr(result, "identity_candidates", []) or []:
+        username = (
+            candidate.get("username", "")
+            if isinstance(candidate, dict)
+            else getattr(candidate, "username", "")
+        )
+        if not username:
+            continue
+        verdict = (
+            candidate.get("verdict", "uncertain")
+            if isinstance(candidate, dict)
+            else getattr(candidate, "verdict", "uncertain")
+        )
+        score = (
+            candidate.get("score", 0.0)
+            if isinstance(candidate, dict)
+            else getattr(candidate, "score", 0.0)
+        )
+        node_id = f"alias::{username}"
+        g.add_node(
+            node_id,
+            kind="alias",
+            label=username,
+            verdict=verdict,
+            score=score,
+        )
+        g.add_edge(root, node_id, relation="identity_candidate")
+
     return g
 
 

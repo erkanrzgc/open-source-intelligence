@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from urllib.parse import urlsplit, urlunsplit
 
 # ── tunables ──────────────────────────────────────────────────────────
 
@@ -221,11 +222,6 @@ def _aliases(payload: dict) -> set[str]:
     """Usernames the scan explicitly surfaced as variants/aliases."""
     out: set[str] = set()
     for u in payload.get("discovered_usernames") or []:
-        if isinstance(u, str):
-            u = _lower(u)
-            if u:
-                out.add(u)
-    for u in payload.get("variations_checked") or []:
         if isinstance(u, str):
             u = _lower(u)
             if u:
@@ -458,5 +454,349 @@ def correlate(a: dict, b: dict) -> CorrelationResult:
         username_b=username_b,
         score=score,
         verdict=_verdict(score, signals),
+        signals=tuple(signals),
+    )
+
+
+# ── identity-candidate resolution ─────────────────────────────────────
+
+IDENTITY_WEIGHT_DIRECT = 0.96
+IDENTITY_WEIGHT_VERIFIED_EMAIL = 0.92
+IDENTITY_WEIGHT_VERIFIED_PHONE = 0.92
+IDENTITY_WEIGHT_EXTERNAL = 0.75
+IDENTITY_WEIGHT_AVATAR = 0.75
+IDENTITY_WEIGHT_NAME_EXACT = 0.40
+IDENTITY_WEIGHT_NAME_FUZZY = 0.25
+IDENTITY_WEIGHT_BIO = 0.25
+IDENTITY_WEIGHT_LOCATION = 0.20
+IDENTITY_WEIGHT_ORGANIZATION = 0.15
+IDENTITY_WEIGHT_HANDLE = 0.10
+
+
+def _profile_dicts(payload: dict) -> list[dict]:
+    profiles: list[dict] = []
+    for row in payload.get("platforms") or []:
+        if not isinstance(row, dict):
+            continue
+        data = row.get("profile_data")
+        if isinstance(data, dict):
+            profiles.append(data)
+    return profiles
+
+
+def _identity_strings(payload: dict, keys: tuple[str, ...]) -> set[str]:
+    values: set[str] = set()
+    for profile in _profile_dicts(payload):
+        for key in keys:
+            value = profile.get(key)
+            if isinstance(value, str) and value.strip():
+                values.add(value.strip())
+    return values
+
+
+def _verified_contacts(payload: dict, *, kind: str) -> set[str]:
+    values: set[str] = set()
+    if kind == "email":
+        for row in payload.get("emails") or []:
+            if isinstance(row, dict) and row.get("verified"):
+                value = row.get("email") or row.get("address")
+                if isinstance(value, str) and value.strip():
+                    values.add(value.strip().casefold())
+        plural_key, value_keys, verified_key = (
+            "verified_emails", ("email", "public_email"), "email_verified"
+        )
+    else:
+        for row in payload.get("phone_intel") or []:
+            if isinstance(row, dict) and row.get("verified"):
+                value = row.get("e164") or row.get("number")
+                if isinstance(value, str) and value.strip():
+                    values.add(value.strip())
+        plural_key, value_keys, verified_key = (
+            "verified_phones", ("phone", "phone_number"), "phone_verified"
+        )
+    for profile in _profile_dicts(payload):
+        plural = profile.get(plural_key) or []
+        if isinstance(plural, list | tuple | set):
+            values.update(
+                str(value).strip().casefold()
+                for value in plural
+                if str(value).strip()
+            )
+        if profile.get(verified_key):
+            for key in value_keys:
+                value = profile.get(key)
+                if isinstance(value, str) and value.strip():
+                    values.add(value.strip().casefold())
+    return values
+
+
+def _normal_url(value: str) -> str:
+    raw = value.strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").casefold()
+    if not host:
+        return ""
+    path = re.sub(r"/+", "/", parsed.path).rstrip("/")
+    return urlunsplit(("https", host, path, "", ""))
+
+
+def _external_urls(payload: dict) -> set[str]:
+    values: set[str] = set()
+    keys = ("blog", "website", "website_url", "web_url", "external_url", "url")
+    for profile in _profile_dicts(payload):
+        for key in keys:
+            value = profile.get(key)
+            if isinstance(value, str):
+                normalized = _normal_url(value)
+                if normalized:
+                    values.add(normalized)
+        links = profile.get("links")
+        if isinstance(links, str):
+            for value in re.findall(r"https?://[^\s,]+", links):
+                normalized = _normal_url(value)
+                if normalized:
+                    values.add(normalized)
+        elif isinstance(links, list | tuple | set):
+            for value in links:
+                if isinstance(value, str):
+                    normalized = _normal_url(value)
+                    if normalized:
+                        values.add(normalized)
+    return values
+
+
+def _social_handles(payload: dict) -> set[str]:
+    values: set[str] = set()
+    for profile in _profile_dicts(payload):
+        for key, value in profile.items():
+            if key.endswith("_username") and isinstance(value, str) and value.strip():
+                values.add(f"{key[:-9].casefold()}:{value.strip().lstrip('@').casefold()}")
+        for container_key in ("social_handles", "socials"):
+            container = profile.get(container_key)
+            if isinstance(container, dict):
+                for service, value in container.items():
+                    if isinstance(value, str) and value.strip():
+                        values.add(
+                            f"{str(service).casefold()}:{value.strip().lstrip('@').casefold()}"
+                        )
+    return values
+
+
+def _identity_avatars(payload: dict) -> set[str]:
+    values = _identity_strings(
+        payload,
+        ("avatar", "avatar_url", "profile_picture", "profile_pic", "picture", "icon_img"),
+    )
+    return {
+        value.strip().casefold()
+        for value in values
+        if not any(
+            marker in value.casefold()
+            for marker in ("default", "placeholder", "identicon", "blank-avatar")
+        )
+    }
+
+
+def _identity_names(payload: dict) -> set[str]:
+    return _identity_strings(
+        payload, ("display_name", "name", "full_name", "fullname", "real_name")
+    )
+
+
+def _identity_bios(payload: dict) -> list[str]:
+    return sorted(
+        _identity_strings(payload, ("bio", "description", "details", "about", "summary"))
+    )
+
+
+def _identity_locations(payload: dict) -> set[str]:
+    return {
+        value.casefold()
+        for value in _identity_strings(payload, ("location", "country", "region"))
+    }
+
+
+def _identity_organizations(payload: dict) -> set[str]:
+    values = {
+        value.casefold()
+        for value in _identity_strings(
+            payload, ("organization", "organisation", "company", "workplace")
+        )
+    }
+    for profile in _profile_dicts(payload):
+        organizations = profile.get("organizations") or profile.get("orgs") or []
+        if isinstance(organizations, list | tuple | set):
+            for row in organizations:
+                if isinstance(row, str) and row.strip():
+                    values.add(row.strip().casefold())
+                elif isinstance(row, dict):
+                    value = row.get("name") or row.get("fullname") or row.get("user")
+                    if isinstance(value, str) and value.strip():
+                        values.add(value.strip().casefold())
+    return values
+
+
+def _identity_name_signals(a: dict, b: dict) -> list[MatchSignal]:
+    left = {name.casefold(): name for name in _identity_names(a)}
+    right = {name.casefold(): name for name in _identity_names(b)}
+    exact = sorted(set(left) & set(right))
+    if exact:
+        value = exact[0]
+        return [
+            MatchSignal(
+                kind="display_name",
+                weight=IDENTITY_WEIGHT_NAME_EXACT,
+                detail=f"exact display name: {left[value]}",
+                a_value=left[value],
+                b_value=right[value],
+            )
+        ]
+    best: tuple[float, str, str] | None = None
+    for left_key, left_value in left.items():
+        for right_key, right_value in right.items():
+            ratio = SequenceMatcher(None, left_key, right_key).ratio()
+            if ratio >= NAME_FUZZY_MIN and (best is None or ratio > best[0]):
+                best = (ratio, left_value, right_value)
+    if best is None:
+        return []
+    return [
+        MatchSignal(
+            kind="display_name_fuzzy",
+            weight=IDENTITY_WEIGHT_NAME_FUZZY,
+            detail=f"similar display name ({best[0]:.2f})",
+            a_value=best[1],
+            b_value=best[2],
+        )
+    ]
+
+
+def _identity_bio_signal(a: dict, b: dict) -> list[MatchSignal]:
+    matches = _match_bios(_identity_bios(a), _identity_bios(b))
+    return [
+        MatchSignal(
+            kind="bio",
+            weight=IDENTITY_WEIGHT_BIO,
+            detail=match.detail,
+            a_value=match.a_value,
+            b_value=match.b_value,
+        )
+        for match in matches[:1]
+    ]
+
+
+def _identity_verdict(score: float, signals: list[MatchSignal]) -> str:
+    kinds = {signal.kind for signal in signals}
+    if kinds & {"direct_profile_link", "verified_email", "verified_phone"}:
+        return "confirmed_same"
+    non_handle = kinds - {"handle_similarity"}
+    strong = any(signal.weight >= 0.75 for signal in signals)
+    if score >= 0.70 and len(non_handle) >= 2 and strong:
+        return "likely_same"
+    if score >= 0.35 and non_handle:
+        return "possible_same"
+    return "uncertain"
+
+
+def correlate_identity(
+    a: dict,
+    b: dict,
+    *,
+    handle_score: float | None = None,
+    direct_link: bool = False,
+) -> CorrelationResult:
+    """Resolve an alias candidate without allowing handle similarity to prove identity."""
+    username_a = _clean(a.get("username"))
+    username_b = _clean(b.get("username"))
+    if handle_score is None:
+        from core.smart_search import handle_similarity
+
+        handle_score = handle_similarity(username_a, username_b)
+    handle_score = max(0.0, min(1.0, float(handle_score)))
+
+    signals: list[MatchSignal] = []
+    if direct_link:
+        signals.append(
+            MatchSignal(
+                kind="direct_profile_link",
+                weight=IDENTITY_WEIGHT_DIRECT,
+                detail="a public profile directly links the other handle",
+                a_value=username_a,
+                b_value=username_b,
+            )
+        )
+    signals.extend(
+        _match_exact_set(
+            _verified_contacts(a, kind="email"),
+            _verified_contacts(b, kind="email"),
+            "verified_email",
+            IDENTITY_WEIGHT_VERIFIED_EMAIL,
+            "verified shared email",
+        )[:1]
+    )
+    signals.extend(
+        _match_exact_set(
+            _verified_contacts(a, kind="phone"),
+            _verified_contacts(b, kind="phone"),
+            "verified_phone",
+            IDENTITY_WEIGHT_VERIFIED_PHONE,
+            "verified shared phone",
+        )[:1]
+    )
+    signals.extend(
+        _match_exact_set(
+            _external_urls(a), _external_urls(b), "external_url",
+            IDENTITY_WEIGHT_EXTERNAL, "shared external URL",
+        )[:1]
+    )
+    signals.extend(
+        _match_exact_set(
+            _social_handles(a), _social_handles(b), "social_handle",
+            IDENTITY_WEIGHT_EXTERNAL, "shared external social handle",
+        )[:1]
+    )
+    signals.extend(
+        _match_exact_set(
+            _identity_avatars(a), _identity_avatars(b), "avatar",
+            IDENTITY_WEIGHT_AVATAR, "shared non-default avatar",
+        )[:1]
+    )
+    signals.extend(_identity_name_signals(a, b))
+    signals.extend(_identity_bio_signal(a, b))
+    signals.extend(
+        _match_exact_set(
+            _identity_locations(a), _identity_locations(b), "location",
+            IDENTITY_WEIGHT_LOCATION, "shared location",
+        )[:1]
+    )
+    signals.extend(
+        _match_exact_set(
+            _identity_organizations(a), _identity_organizations(b), "organization",
+            IDENTITY_WEIGHT_ORGANIZATION, "shared organization",
+        )[:1]
+    )
+    if username_a and username_b:
+        signals.append(
+            MatchSignal(
+                kind="handle_similarity",
+                weight=min(IDENTITY_WEIGHT_HANDLE, IDENTITY_WEIGHT_HANDLE * handle_score),
+                detail=f"Damerau-Levenshtein handle similarity ({handle_score:.2f})",
+                a_value=username_a,
+                b_value=username_b,
+            )
+        )
+
+    score = _combine(signals)
+    return CorrelationResult(
+        username_a=username_a,
+        username_b=username_b,
+        score=score,
+        verdict=_identity_verdict(score, signals),
         signals=tuple(signals),
     )

@@ -3,7 +3,7 @@
 Usage:
     osint                         # interactive mode
     osint scan <username>         # quick scan with flags
-    osint scan <username> --popular --smart --email
+    osint scan <username> --full --no-smart --email
 
 Scans are saved to: log/<username>/<timestamp>.json
 """
@@ -20,14 +20,15 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from core.config import ScanConfig
+from core.config import REQUEST_TIMEOUT, ScanConfig
 from core.engine import run_scan
-from modules.platforms import PLATFORMS
 from core.models import ScanResult
+from core.platform_loader import CATEGORY_LABELS
+from modules.platforms import PLATFORMS
 
 console = Console()
 
@@ -52,17 +53,29 @@ def _print_header(username: str, full_name: str | None, platform_count: int) -> 
 
 
 def _print_results(result: ScanResult, elapsed: float) -> None:
-    found = [p for p in result.platforms if p.status == "verified"]
-    fake = [p for p in result.platforms if p.status in ("verified_fake", "verified_bad", "verified_error")]
+    found = [
+        p for p in result.platforms
+        if (p.verification or {}).get("verdict") == "confirmed" or p.exists
+    ]
+    uncertain = [
+        p for p in result.platforms
+        if (p.verification or {}).get("verdict") == "uncertain"
+    ]
+    fake = [
+        p for p in result.platforms
+        if (p.verification or {}).get("verdict") == "rejected"
+    ]
     table = Table(title="Results", border_style="green")
     table.add_column("Metric", style="bold")
     table.add_column("Value")
     table.add_row("Confirmed platforms", str(len(found)))
+    table.add_row("Uncertain candidates", str(len(uncertain)))
     table.add_row("Dropped (false positive)", str(len(fake)))
     table.add_row("Matched before verify", str(sum(1 for p in result.platforms if p.exists)))
     table.add_row("Total checked", str(result.total_checked))
     table.add_row("Emails", str(len(result.emails)))
     table.add_row("Discovered usernames", str(len(result.discovered_usernames)))
+    table.add_row("Identity candidates", str(len(result.identity_candidates)))
     table.add_row("Time", f"{elapsed:.1f}s")
     console.print(table)
 
@@ -106,6 +119,33 @@ def _show_result(result: ScanResult, elapsed: float, log_file: Path | None) -> N
         console.print(f"[bold]Discovered usernames:[/bold] {', '.join(result.discovered_usernames)}")
         console.print()
 
+    if result.identity_candidates:
+        identity_table = Table(
+            title="Similar usernames / Identity candidates", border_style="magenta"
+        )
+        identity_table.add_column("Handle")
+        identity_table.add_column("Platforms")
+        identity_table.add_column("Verdict")
+        identity_table.add_column("Score", justify="right")
+        identity_table.add_column("Evidence", max_width=50)
+        for candidate in result.identity_candidates:
+            row = candidate.to_dict() if hasattr(candidate, "to_dict") else candidate
+            profiles = ", ".join(
+                profile.get("platform", "") for profile in row.get("profiles", [])
+            )
+            evidence = "; ".join(
+                item.get("detail", "") for item in row.get("evidence", [])[:3]
+            )
+            identity_table.add_row(
+                row.get("username", ""),
+                profiles,
+                row.get("verdict", "uncertain"),
+                f"{float(row.get('score', 0)):.2f}",
+                evidence,
+            )
+        console.print(identity_table)
+        console.print()
+
     if result.emails:
         email_table = Table(title="Emails Found", border_style="yellow")
         email_table.add_column("Email")
@@ -125,7 +165,7 @@ def _show_result(result: ScanResult, elapsed: float, log_file: Path | None) -> N
 def _pick_categories() -> tuple[str, ...] | None:
     console.print("\n[bold]Available categories:[/bold]")
     for i, cat in enumerate(CATEGORIES, 1):
-        console.print(f"  {i:2d}. {cat}")
+        console.print(f"  {i:2d}. {CATEGORY_LABELS.get(cat, cat)} ({cat})")
     console.print("   a. All categories")
     choice = Prompt.ask("Pick categories (numbers/comma-separated, or 'a')", default="a")
     if choice.strip().lower() == "a":
@@ -141,203 +181,27 @@ def _pick_categories() -> tuple[str, ...] | None:
     return tuple(picked) if picked else None
 
 
-def _selected_platforms(categories: tuple[str, ...] | None) -> list:
-    if not categories:
-        from core.engine import _verified_platforms
-        return _verified_platforms()
-    if categories == ("__all__",):
-        return list(PLATFORMS)
-    if categories in (("__popular__",), ("__verified__",)):
-        from core.engine import _select_platforms
-        return _select_platforms(categories)
-    return [p for p in PLATFORMS if p.category in categories]
+def _selected_platforms(
+    categories: tuple[str, ...] | None,
+    platform_scope: str = "core",
+) -> list:
+    from core.engine import _select_platforms
+
+    return _select_platforms(categories, platform_scope)
 
 
 async def _verify_all_matches(result: ScanResult) -> ScanResult:
-    """Re-check ALL found URLs. AI-powered when available, strict body check as fallback.
-
-    For non-JS-heavy platforms, fetch via aiohttp directly.
-    For js_heavy platforms (SPA/React sites like TikTok, Instagram), render
-    via Playwright first so the AI can evaluate actual page content instead
-    of an empty SPA shell.
-    """
-    import aiohttp
-
-    candidates = [p for p in result.platforms if p.exists]
-    if not candidates:
-        return result
-
-    console.print(f"\n  [yellow]Verifying {len(candidates)} matches...[/yellow]")
-
-    ai_available = False
-    try:
-        from core.analysis.llm import LLMAnalyzer, LLMUnavailable
-        analyzer = LLMAnalyzer.from_env()
-        ai_available = True
-    except Exception:
-        analyzer = None
-
-    browser_available = False
-    try:
-        from modules.stealth.playwright_fallback import AVAILABLE as PW_AVAILABLE, fetch_rendered
-        browser_available = PW_AVAILABLE
-    except Exception:
-        browser_available = False
-
-    if ai_available:
-        console.print("  [green]AI-powered verification active[/green]")
-    else:
-        console.print("  [dim]AI unavailable — using strict body check[/dim]")
-
-    if browser_available:
-        console.print("  [green]Playwright rendering active[/green]")
-
-    # Build platform lookup for js_heavy flag
-    from modules.platforms import PLATFORMS
-    platform_map: dict[str, object] = {p.name: p for p in PLATFORMS}
-
-    kept = 0
-    dropped = 0
-
-    async with aiohttp.ClientSession() as session:
-        for p in candidates:
-            try:
-                body = ""
-                plat_def = platform_map.get(p.platform)
-                js_heavy = getattr(plat_def, "js_heavy", False) if plat_def else False
-
-                if js_heavy and browser_available:
-                    try:
-                        rendered = await fetch_rendered(
-                            p.url,
-                            timeout_ms=max(5000, 15 * 1000),
-                            wait_for_selector=getattr(plat_def, "wait_for_selector", None),
-                        )
-                        if rendered:
-                            body = rendered.html
-                            p.rendered = True
-                        else:
-                            raise Exception("render failed")
-                    except Exception:
-                        async with session.get(p.url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                            if resp.status != 200:
-                                p.exists = False
-                                p.status = "verified_bad"
-                                p.fp_signals = list(p.fp_signals) + [f"verify:{resp.status}"]
-                                dropped += 1
-                                continue
-                            body = await resp.text()
-                else:
-                    async with session.get(p.url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status != 200:
-                            p.exists = False
-                            p.status = "verified_bad"
-                            p.fp_signals = list(p.fp_signals) + [f"verify:{resp.status}"]
-                            dropped += 1
-                            continue
-                        body = await resp.text()
-
-                if not body:
-                    p.exists = False
-                    p.status = "verified_bad"
-                    p.fp_signals = list(p.fp_signals) + ["verify:empty_body"]
-                    dropped += 1
-                    continue
-
-                is_real = False
-
-                if ai_available and analyzer:
-                    known_emails = [e.email for e in (result.emails or [])]
-                    known_handles = list(result.discovered_usernames or []) + [result.username]
-                    is_real = await _ai_verify_page(
-                        analyzer, result.username, getattr(result, "full_name", None),
-                        known_emails, known_handles, p.platform, p.url, body[:8000],
-                    )
-                else:
-                    is_real = result.username.lower() in body.lower()
-
-                if is_real:
-                    p.confidence = 1.0
-                    p.status = "verified"
-                    p.fp_signals = list(p.fp_signals) + ["verify:confirmed"]
-                    kept += 1
-                else:
-                    p.exists = False
-                    p.status = "verified_fake"
-                    p.fp_signals = list(p.fp_signals) + ["verify:ai_rejected"]
-                    dropped += 1
-
-            except Exception:
-                p.exists = False
-                p.status = "verified_error"
-                dropped += 1
-
-    console.print(f"  [green]Real: {kept}[/green]  [red]Fake: {dropped}[/red]")
+    """Compatibility shim; engine verification is the sole decision path."""
+    # Kept as a compatibility shim for callers that imported this private
+    # helper. Verification now happens once inside core.engine for every
+    # entrypoint; the CLI no longer has a second network/AI decision path.
     return result
-
-
-async def _ai_verify_page(analyzer, target_username: str, full_name: str | None, known_emails: list[str], known_handles: list[str], platform: str, url: str, html: str) -> bool:
-    """Ask AI: is this page a real profile?
-
-    Extracts clean readable text from HTML via trafilatura (handles React/Vue/Angular/Svelte
-    SPAs as long as the HTML is server-rendered or we pre-rendered with Playwright).
-    Falls back to regex tag-stripping if trafilatura is not installed.
-    """
-    import re
-    from core.analysis.skill_loader import run_skill, SkillError
-
-    try:
-        import trafilatura
-        text = trafilatura.extract(
-            html,
-            output_format="txt",
-            include_comments=False,
-            include_tables=False,
-            include_images=False,
-            include_links=False,
-        )
-        if not text:
-            text = re.sub(r"<[^>]+>", " ", html)
-            text = re.sub(r"\s+", " ", text).strip()
-    except ImportError:
-        text = re.sub(r"<[^>]+>", " ", html)
-        text = re.sub(r"\s+", " ", text).strip()
-
-    text = text.strip()[:4000]
-
-    target_ctx: dict = {"username": target_username}
-    if full_name:
-        target_ctx["full_name"] = full_name
-    if known_emails:
-        target_ctx["known_emails"] = known_emails[:5]
-    if known_handles:
-        target_ctx["known_handles_on_other_platforms"] = known_handles[:10]
-
-    try:
-        result = await run_skill(
-            "profile_validator",
-            {
-                "target": target_ctx,
-                "profile": {
-                    "platform": platform,
-                    "url": url,
-                    "bio": text[:2000],
-                },
-            },
-            budget=None,
-            use_cache=False,
-        )
-        verdict = result.get("verdict", "uncertain")
-        score = int(result.get("match_score", 0))
-        return verdict in ("match", "likely_match") and score >= 40
-    except SkillError:
-        return target_username.lower() in text.lower()
 
 
 async def _interactive() -> int:
     console.print(Panel(
         "[bold blue]Open Source Intelligence[/bold blue] — username scanner\n"
-        "~500 platforms · email breach · AI validation",
+        "100 core platforms · deterministic alias discovery · optional AI",
         border_style="blue",
     ))
     console.print()
@@ -349,21 +213,23 @@ async def _interactive() -> int:
 
     console.print()
     console.print("[bold]Scan type:[/bold]")
-    console.print("  [1] Quick     — default platforms (~500)")
-    console.print("  [2] Full      — all 1922 platforms")
+    console.print("  [1] Core      — 100 high-value platforms")
+    console.print("  [2] Full      — up to 500 curated platforms")
     console.print("  [3] Custom    — pick everything yourself")
     console.print()
 
     choice = Prompt.ask("Choose", choices=["1", "2", "3"], default="1")
 
     categories: tuple[str, ...] | None = None
-    smart = False
+    smart = True
+    platform_scope = "core"
     full_name: str | None = None
 
     if choice == "1":
         categories = None
     elif choice == "2":
         categories = ("__all__",)
+        platform_scope = "full"
     elif choice == "3":
         cats_raw = _pick_categories()
         if cats_raw is None:
@@ -386,12 +252,11 @@ async def _interactive() -> int:
         holehe=True,
         ghunt=True,
         categories=categories,
-        ai_skills=True,
-        ai_skill_budget=30,
-        fp_threshold=0.25,
+        platform_scope=platform_scope,
+        ai_skills=False,
     )
 
-    platforms = _selected_platforms(cfg.categories)
+    platforms = _selected_platforms(cfg.categories, cfg.platform_scope)
     _print_header(cfg.username, cfg.full_name, len(platforms))
 
     progress = Progress(
@@ -408,15 +273,6 @@ async def _interactive() -> int:
         result = await run_scan(cfg)
         elapsed = time.monotonic() - t0
         progress.update(task, completed=100, total=100, description="Done")
-
-    if result.found_platforms:
-        progress2 = Progress(
-            SpinnerColumn(),
-            TextColumn("[yellow]Verifying...[/yellow]"),
-            TimeElapsedColumn(),
-        )
-        with Live(progress2, console=console, refresh_per_second=4):
-            result = await _verify_all_matches(result)
 
     log_file = _log_path(username)
 
@@ -444,16 +300,40 @@ def _cli_scan(argv: list[str]) -> int:
     parser.add_argument("username", nargs="?")
     parser.add_argument("--full-name")
     parser.add_argument("--email-only")
-    parser.add_argument("--verified", action="store_true", help="Use verified platforms (~500, default)")
-    parser.add_argument("--full", action="store_true", help="Use all 1922 platforms")
+    parser.add_argument("--verified", action="store_true", help="Use legacy deterministic verified selector")
+    parser.add_argument("--full", action="store_true", help="Use up to 500 curated platforms")
     parser.add_argument("--no-deep", action="store_true")
-    parser.add_argument("--smart", action="store_true")
+    smart_group = parser.add_mutually_exclusive_group()
+    smart_group.add_argument("--smart", dest="smart", action="store_true")
+    smart_group.add_argument(
+        "--no-smart", dest="smart", action="store_false",
+        help="Disable similar-username and identity-candidate discovery",
+    )
+    parser.set_defaults(smart=True)
+    parser.add_argument(
+        "--alias-max-candidates",
+        type=int,
+        default=24,
+        metavar="1-24",
+        help="Alias candidate cap; candidates 13-24 use adaptive fallback",
+    )
+    parser.add_argument("--alias-platform-limit", type=int, default=15)
     parser.add_argument("--email", action="store_true")
     parser.add_argument("--breach", action="store_true")
     parser.add_argument("--photo", action="store_true")
     parser.add_argument("--whois", action="store_true")
     parser.add_argument("--categories")
-    parser.add_argument("--timeout", type=int, default=15)
+    parser.add_argument("--timeout", type=int, default=REQUEST_TIMEOUT)
+    parser.add_argument(
+        "--ai",
+        action="store_true",
+        help="Opt in to LLM validation and the executive summary skill",
+    )
+    parser.add_argument(
+        "--allow-private-networks",
+        action="store_true",
+        help="Allow HTTP targets on loopback/private networks",
+    )
 
     args = parser.parse_args(argv)
     if not args.username:
@@ -463,10 +343,14 @@ def _cli_scan(argv: list[str]) -> int:
             return 1
 
     categories: tuple[str, ...] | None = None
+    platform_scope = "core"
     if args.categories:
         categories = tuple(c.strip() for c in args.categories.split(",") if c.strip())
     elif args.full:
         categories = ("__all__",)
+        platform_scope = "full"
+    elif args.verified:
+        categories = ("__verified__",)
 
     cfg = ScanConfig(
         username=args.username,
@@ -479,17 +363,20 @@ def _cli_scan(argv: list[str]) -> int:
         photo=args.photo,
         whois=args.whois,
         categories=categories,
+        platform_scope=platform_scope,
+        alias_max_candidates=args.alias_max_candidates,
+        alias_platform_limit=args.alias_platform_limit,
         request_timeout=args.timeout,
-        ai_skills=True,
-        ai_skill_budget=30,
-        fp_threshold=0.25,
+        ai_skills=args.ai,
+        ai_report=args.ai,
+        allow_private_networks=args.allow_private_networks,
     )
 
     return asyncio.run(_run_scan_fast(cfg))
 
 
 async def _run_scan_fast(cfg: ScanConfig) -> int:
-    platforms = _selected_platforms(cfg.categories)
+    platforms = _selected_platforms(cfg.categories, cfg.platform_scope)
     _print_header(cfg.username, cfg.full_name, len(platforms))
 
     progress = Progress(
@@ -505,15 +392,6 @@ async def _run_scan_fast(cfg: ScanConfig) -> int:
         result = await run_scan(cfg)
         elapsed = time.monotonic() - t0
         progress.update(task, completed=100, total=100, description="Done")
-
-    if result.found_platforms:
-        progress2 = Progress(
-            SpinnerColumn(),
-            TextColumn("[yellow]Verifying...[/yellow]"),
-            TimeElapsedColumn(),
-        )
-        with Live(progress2, console=console, refresh_per_second=4):
-            result = await _verify_all_matches(result)
 
     log_file = _log_path(cfg.username)
     log_file.write_text(

@@ -12,7 +12,6 @@ from modules.reverse_image import tineye, yandex
 from modules.reverse_image.models import ReverseImageHit
 from modules.reverse_image.orchestrator import _dedupe, run_reverse_image
 
-
 # ── ReverseImageHit / dedupe ────────────────────────────────────────
 
 

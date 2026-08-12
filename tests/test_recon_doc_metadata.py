@@ -377,7 +377,7 @@ def _build_minimal_xlsx(props: dict) -> bytes:
 
 def _build_minimal_pdf(metadata: dict) -> bytes:
     """Use pypdf to write a one-blank-page PDF carrying ``metadata``."""
-    from pypdf import PdfWriter
+    PdfWriter = pytest.importorskip("pypdf").PdfWriter
 
     writer = PdfWriter()
     writer.add_blank_page(width=72, height=72)

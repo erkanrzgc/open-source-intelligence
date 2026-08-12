@@ -40,7 +40,7 @@ async def notify_all(
     async def _one(n: Notifier) -> tuple[str, bool]:
         try:
             ok = await n.send(notification)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("notifier %s raised: %s", n.name, exc)
             ok = False
         return n.name, ok

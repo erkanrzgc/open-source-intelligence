@@ -26,16 +26,20 @@ from core.config import ScanConfig
 from core.engine import run_scan
 from core.history import get_latest, get_scan, list_scans
 from core.scan_service import complete_scan_result
+from core.version import __version__
 from utils.helpers import sanitize_username
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "open-source-intelligence", "version": "0.1.0"}
+SERVER_INFO = {"name": "open-source-intelligence", "version": __version__}
 _MAX_LINE_BYTES = 1_048_576  # 1 MiB stdin line limit
 
 TOOLS = [
     {
         "name": "scan_username",
-        "description": "Run an OSINT scan across ~90 public platforms for a username.",
+        "description": (
+            "Run a precision-first OSINT identity scan across the 100-site core "
+            "or curated 500-site full catalog, including bounded alias discovery."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -47,7 +51,22 @@ TOOLS = [
                 },
                 "deep": {"type": "boolean", "default": True},
                 "email": {"type": "boolean", "default": False},
-                "smart": {"type": "boolean", "default": False},
+                "smart": {"type": "boolean", "default": True},
+                "platform_scope": {
+                    "type": "string",
+                    "enum": ["core", "full"],
+                    "default": "core",
+                },
+                "alias_max_candidates": {
+                    "type": "integer", "minimum": 1, "maximum": 24, "default": 24,
+                    "description": "Adaptive alias cap; candidates 13-24 use five sites",
+                },
+                "alias_platform_limit": {
+                    "type": "integer", "minimum": 1, "maximum": 15, "default": 15,
+                },
+                "ai_skills": {"type": "boolean", "default": False},
+                "ai_report": {"type": "boolean", "default": False},
+                "allow_private_networks": {"type": "boolean", "default": False},
             },
             "required": ["username"],
         },
@@ -150,7 +169,7 @@ async def _scan(args: dict) -> dict:
     cfg = ScanConfig(
         username=username,
         deep=bool(args.get("deep", True)),
-        smart=bool(args.get("smart", False)),
+        smart=bool(args.get("smart", True)),
         email=bool(args.get("email", False)),
         web=False,
         whois=False,
@@ -159,6 +178,12 @@ async def _scan(args: dict) -> dict:
         dns=False,
         subdomain=False,
         categories=cat_tuple,
+        platform_scope=str(args.get("platform_scope", "core")),
+        alias_max_candidates=int(args.get("alias_max_candidates", 24)),
+        alias_platform_limit=int(args.get("alias_platform_limit", 15)),
+        ai_skills=bool(args.get("ai_skills", False)),
+        ai_report=bool(args.get("ai_report", False)),
+        allow_private_networks=bool(args.get("allow_private_networks", False)),
     )
     result = await run_scan(cfg)
     completed = complete_scan_result(

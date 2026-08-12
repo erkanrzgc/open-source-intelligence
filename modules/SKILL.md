@@ -8,10 +8,15 @@ dependencies: each module is independently optional
 ai_required: false
 ---
 
+`providers/` contains typed, credential-injected official exact-profile
+adapters. Use it instead of adding credentialed, batched or multi-step APIs as
+generic `url_probe` strings.
+
 ## Module index
 
 | Module | Subject | SKILL.md |
 |---|---|---|
+| `providers/` | Official exact-profile APIs and batch scheduling | `providers/SKILL.md` |
 | `recon/` | Corporate red-team recon + handle generation | `recon/SKILL.md` |
 | `passive/` | Third-party intel sources | `passive/SKILL.md` |
 | `phone/` | Phone metadata extraction | `phone/SKILL.md` |
@@ -29,7 +34,7 @@ by `core/engine.py`:
 
 | File | Purpose |
 |---|---|
-| `platforms.py` / `platforms.yaml` | Platform registry (1924 sites) |
+| `platforms.py` / `platforms.yaml` | Curated registry (100 core / up to 500 full) |
 | `web_presence.py` | Wayback snapshots + paste sites |
 | `dns_lookup.py` | DNS records + subdomain enumeration |
 | `email_discovery.py` | Email candidates + Gravatar |
@@ -43,7 +48,7 @@ by `core/engine.py`:
 | `profile_extract.py` | socid_extractor wrapper |
 | `profile_liveness.py` | Active-profile scoring (avatar/bio/og/jsonld) |
 | `fp_filter.py` | False-positive confidence scoring |
-| `deep_scrapers.py` | Hand-curated deep-profile scrapers (~12 sites) |
+| `deep_scrapers.py` | Hand-curated deep-profile scrapers, including Hugging Face public user APIs |
 
 ## Module-author checklist
 

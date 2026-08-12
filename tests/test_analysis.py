@@ -16,7 +16,6 @@ from modules.crypto.models import CryptoIntel
 from modules.history.models import HistoricalUsername
 from modules.phone.models import PhoneIntel
 
-
 # ── Stylometry ──────────────────────────────────────────────────────
 
 

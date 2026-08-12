@@ -12,7 +12,6 @@ from core.http_client import HTTPClient
 from modules.passive import wigle
 from modules.passive.wigle import _basic_auth
 
-
 # ── Pure helpers ────────────────────────────────────────────────────
 
 

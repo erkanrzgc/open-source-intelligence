@@ -40,7 +40,7 @@ log = get_logger(__name__)
 
 try:  # pragma: no cover - import guard
     import httpx
-    from holehe.core import import_submodules, get_functions
+    from holehe.core import get_functions, import_submodules
 
     _MODULES = import_submodules("holehe.modules")
     _FUNCS = get_functions(_MODULES)

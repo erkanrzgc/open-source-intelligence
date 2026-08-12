@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core import cases, history, watchlist
+from core import cases, history, scan_service, watchlist
 from core.config import ScanConfig
 from core.models import PlatformResult, ScanResult
+from core.plugins import PluginRegistry
 from core.scan_service import SCAN_PAYLOAD_SCHEMA_VERSION, complete_scan_result
 
 
@@ -81,3 +82,21 @@ def test_complete_scan_result_persists_case_and_watchlist(tmp_path: Path):
     bookmarks = cases.list_bookmarks(case.id, db_path=cases_db)
     assert len(bookmarks) == 1
     assert bookmarks[0].scan_id == completed.scan_id
+
+
+def test_completion_runs_plugins_once_and_records_timing(monkeypatch):
+    registry = PluginRegistry()
+    calls: list[str] = []
+    registry.post_scan(lambda result, cfg: calls.append(result.username))
+    monkeypatch.setattr(scan_service, "_PLUGIN_REGISTRY", registry)
+    result = _result("alice")
+    cfg = ScanConfig(username="alice")
+
+    complete_scan_result(result, cfg, save_history=False)
+    complete_scan_result(result, cfg, save_history=False)
+
+    assert calls == ["alice"]
+    plugin_diag = result.diagnostics["phases"]["plugins"]
+    assert plugin_diag["status"] == "completed"
+    assert plugin_diag["metrics"]["completed"] == 1
+    assert plugin_diag["duration_ms"] >= 0

@@ -67,7 +67,7 @@ def detect_languages(samples: list[str]) -> list[LanguageGuess]:
             try:
                 for guess in detect_langs(sample):
                     per_lang[guess.lang].append(float(guess.prob))
-            except Exception:  # noqa: BLE001 - langdetect can raise on short text
+            except Exception:
                 code = _fallback(sample)
                 per_lang[code].append(0.4)
     else:

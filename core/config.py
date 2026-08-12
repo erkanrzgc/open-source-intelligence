@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from modules.fp_filter import DEFAULT_THRESHOLD
+from utils.helpers import sanitize_username
+
 
 def _env_int(key: str, default: int) -> int:
     try:
@@ -45,7 +48,7 @@ class ScanConfig:
 
     username: str
     deep: bool = True
-    smart: bool = False
+    smart: bool = True
     email: bool = False
     web: bool = False
     whois: bool = False
@@ -70,8 +73,11 @@ class ScanConfig:
     proxies: tuple[str, ...] = ()
     tor: bool = False
     categories: tuple[str, ...] | None = None
+    platform_scope: str = "core"
+    alias_max_candidates: int = 24
+    alias_platform_limit: int = 15
     request_timeout: int = REQUEST_TIMEOUT
-    fp_threshold: float = 0.35  # drop matches below this confidence
+    fp_threshold: float = DEFAULT_THRESHOLD  # shared by Python, CLI, REST and MCP
     skip_invalid_usernames: bool = True  # pre-filter platforms where username doesn't match pattern
     fingerprint: bool = True
     new_circuit_every: int = 0
@@ -102,3 +108,20 @@ class ScanConfig:
     email_only: str | None = None  # email-first scan target
     ai_skills: bool = False  # opt-in: use LLM-backed skills during scan
     ai_skill_budget: int = 20  # max LLM calls per scan when ai_skills is on
+    ai_report: bool = False  # opt-in executive summary skill
+    allow_private_networks: bool = False  # explicit opt-in for local-network research
+
+    def __post_init__(self) -> None:
+        """Normalize the target at the single public configuration boundary."""
+        if self.username:
+            object.__setattr__(self, "username", sanitize_username(self.username))
+        if not 0.0 <= self.fp_threshold <= 1.0:
+            raise ValueError("fp_threshold must be between 0 and 1")
+        if self.ai_skill_budget < 0:
+            raise ValueError("ai_skill_budget must be non-negative")
+        if self.platform_scope not in ("core", "full"):
+            raise ValueError("platform_scope must be 'core' or 'full'")
+        if not 1 <= self.alias_max_candidates <= 24:
+            raise ValueError("alias_max_candidates must be between 1 and 24")
+        if not 1 <= self.alias_platform_limit <= 15:
+            raise ValueError("alias_platform_limit must be between 1 and 15")

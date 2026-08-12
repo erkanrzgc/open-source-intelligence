@@ -1,5 +1,6 @@
 """Tests for core/history.py — SQLite scan history and diffing."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,7 @@ def test_save_and_list(db: Path):
     assert len(entries) == 1
     assert entries[0].found_count == 1
     assert entries[0].found_names == {"GitHub"}
+    assert entries[0].payload["identity_candidates"] == []
 
 
 def test_list_ordered_desc(db: Path):
@@ -139,3 +141,38 @@ def test_update_scan_payload_replaces_json_blob(db: Path):
     assert updated is not None
     assert updated.payload["schema_version"] == "test"
     assert updated.payload["scan_id"] == scan_id
+
+
+def test_history_migration_tracks_payload_schema_version(db: Path):
+    scan_id = save_scan(
+        {**_payload("alice", []), "schema_version": "2026-08-08"},
+        ts=1000,
+        db_path=db,
+    )
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT payload_schema_version FROM scans WHERE id = ?", (scan_id,)
+        ).fetchone()
+        migrations = conn.execute("SELECT version FROM _migrations").fetchall()
+    assert row == ("2026-08-08",)
+    assert migrations == [(1,)]
+
+
+def test_history_migration_adopts_preexisting_column_without_ledger(db: Path):
+    with sqlite3.connect(db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                ts INTEGER NOT NULL,
+                found_count INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                payload_schema_version TEXT NOT NULL DEFAULT 'legacy'
+            );
+            """
+        )
+    assert list_scans("alice", db_path=db) == []
+    with sqlite3.connect(db) as conn:
+        migrations = conn.execute("SELECT version FROM _migrations").fetchall()
+    assert migrations == [(1,)]

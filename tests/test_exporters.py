@@ -15,7 +15,8 @@ from core.reporter import (
     export_obsidian,
     export_stix,
 )
-from core.reporter.pdf_export import export_pdf, is_available as pdf_available
+from core.reporter.pdf_export import export_pdf
+from core.reporter.pdf_export import is_available as pdf_available
 from modules.crypto.models import CryptoIntel
 from modules.history.models import HistoricalUsername
 from modules.phone.models import PhoneIntel

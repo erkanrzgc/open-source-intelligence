@@ -63,7 +63,7 @@ main {
 .row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .row label { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; font-size: 0.8rem; color: var(--muted); gap: 0.25rem; }
 
-input[type="text"], input:not([type]) {
+input[type="text"], input:not([type]), select {
   width: 100%;
   padding: 0.6rem 0.75rem;
   background: var(--surface-hi);
@@ -73,6 +73,7 @@ input[type="text"], input:not([type]) {
   font-family: var(--mono);
   font-size: 0.9rem;
 }
+select[multiple] { min-height: 7.5rem; }
 input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .checkbox-grid {
@@ -100,6 +101,30 @@ button:hover { transform: translateY(-1px); box-shadow: 0 8px 24px -8px var(--ac
 button:active { transform: translateY(0); }
 
 #scan-status { margin-top: 0.75rem; font-family: var(--mono); font-size: 0.85rem; color: var(--muted); }
+#verification-status {
+  margin-top: 0.45rem;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+#identity-candidates {
+  margin-top: 0.75rem;
+  overflow-x: auto;
+}
+#identity-candidates h3 { color: var(--muted); font-size: 0.9rem; }
+#identity-candidates table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+#identity-candidates th, #identity-candidates td {
+  padding: 0.45rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+#phase-warnings {
+  margin: 0.45rem 0 0;
+  color: #ffb36b;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
 #capability-status,
 #job-status {
   margin-bottom: 0.75rem;

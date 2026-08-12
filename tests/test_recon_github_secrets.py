@@ -18,7 +18,6 @@ from modules.recon.github_secrets import (
 )
 from modules.recon.models import LeakedSecret
 
-
 # ── Rule catalog & pattern matching ─────────────────────────────────
 
 

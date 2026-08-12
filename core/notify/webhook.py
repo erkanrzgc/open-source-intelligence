@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import os
 
-import aiohttp
-
+from core.http_client import HTTPClient
 from core.logging_setup import get_logger
 from core.notify.base import Notification
 
@@ -26,36 +25,42 @@ class WebhookNotifier:
         *,
         secret: str | None = None,
         timeout: float = 10.0,
+        allow_private_networks: bool = False,
     ) -> None:
         self._url = url
         self._secret = secret
         self._timeout = timeout
+        self._allow_private_networks = allow_private_networks
 
     @classmethod
-    def from_env(cls) -> "WebhookNotifier | None":
+    def from_env(cls) -> WebhookNotifier | None:
         url = os.environ.get("OSINT_WEBHOOK_URL", "").strip()
         if not url:
             return None
         secret = os.environ.get("OSINT_WEBHOOK_SECRET", "").strip() or None
-        return cls(url, secret=secret)
+        allow_private = os.environ.get(
+            "OSINT_WEBHOOK_ALLOW_PRIVATE_NETWORKS", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        return cls(url, secret=secret, allow_private_networks=allow_private)
 
     async def send(self, notification: Notification) -> bool:
         headers = {"Content-Type": "application/json"}
         if self._secret:
             headers["X-OSINT-Secret"] = self._secret
         try:
-            timeout = aiohttp.ClientTimeout(total=self._timeout)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    self._url, json=notification.to_dict(), headers=headers
-                ) as resp:
-                    if resp.status >= 400:
-                        body = await resp.text()
-                        log.warning(
-                            "webhook notify HTTP %s: %s", resp.status, body[:200]
-                        )
-                        return False
-                    return True
-        except (aiohttp.ClientError, OSError) as exc:
+            async with HTTPClient(
+                request_timeout=self._timeout,
+                allow_private_networks=self._allow_private_networks,
+            ) as client:
+                status, _body, _elapsed = await client.post_json(
+                    self._url,
+                    notification.to_dict(),
+                    headers,
+                )
+            if status <= 0 or status >= 400:
+                log.warning("webhook notify HTTP %s", status)
+                return False
+            return True
+        except (OSError, ValueError) as exc:
             log.warning("webhook notify failed: %s", exc)
             return False

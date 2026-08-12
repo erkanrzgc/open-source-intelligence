@@ -1,5 +1,7 @@
 """Tests for core/config.py."""
 
+import pytest
+
 from core.config import ScanConfig, _env_float, _env_int
 
 
@@ -38,9 +40,17 @@ class TestScanConfig:
         cfg = ScanConfig(username="alice")
         assert cfg.username == "alice"
         assert cfg.deep is True
-        assert cfg.smart is False
+        assert cfg.smart is True
+        assert cfg.platform_scope == "core"
+        assert cfg.alias_max_candidates == 24
+        assert cfg.alias_platform_limit == 15
         assert cfg.categories is None
         assert cfg.browser_backend == "playwright"
+
+    def test_alias_candidate_limit_accepts_24_and_rejects_25(self):
+        assert ScanConfig(username="alice", alias_max_candidates=24)
+        with pytest.raises(ValueError, match="between 1 and 24"):
+            ScanConfig(username="alice", alias_max_candidates=25)
 
     def test_frozen(self):
         cfg = ScanConfig(username="alice")

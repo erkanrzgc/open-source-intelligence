@@ -8,6 +8,7 @@ from core import engine as engine_mod
 from core.config import ScanConfig
 from core.engine import (
     _check_platform,
+    _evaluate_platform_result,
     _extract_avatar_urls,
     _phase_recursive,
     _phase_smart_search,
@@ -29,15 +30,112 @@ class TestStatusFromHttp:
     def test_blocked(self):
         assert _status_from_http(429, False) == "blocked"
 
+    def test_server_error_is_not_absence(self):
+        assert _status_from_http(503, False) == "error"
+
     def test_login_required(self):
-        assert _status_from_http(401, False) == "login_required"
-        assert _status_from_http(403, False) == "login_required"
+        assert _status_from_http(401, False) == "unavailable_auth"
+        assert _status_from_http(403, False) == "unavailable_auth"
 
     def test_found(self):
         assert _status_from_http(200, True) == "found"
 
     def test_not_found(self):
         assert _status_from_http(200, False) == "not_found"
+
+
+def test_heuristic_deep_payload_remains_ambiguous():
+    platform = Platform(
+        name="SearchOnly",
+        url="https://search.test/{username}",
+        category="social",
+        has_deep_scraper=True,
+        lookup_semantics="search",
+    )
+    result = PlatformResult(
+        platform=platform.name,
+        url="https://search.test/alice",
+        category="social",
+        exists=True,
+        status="found",
+        confidence=1.0,
+        profile_data={"username": "alice"},
+    )
+
+    _evaluate_platform_result(
+        result,
+        platform,
+        ScanConfig(username="alice"),
+        deep_scraped=True,
+    )
+
+    assert result.exists is False
+    assert result.probe_outcome == "ambiguous"
+    assert result.verification["verdict"] == "uncertain"
+    assert result.verification["reason_codes"] == ["insufficient_presence_contract"]
+
+
+def test_official_exact_contract_requires_matching_canonical_username():
+    platform = Platform(
+        name="Official",
+        url="https://official.test/{username}",
+        category="social",
+        evidence_class="official_exact",
+        lookup_semantics="exact",
+    )
+    matching = PlatformResult(
+        platform=platform.name,
+        url="https://official.test/alice",
+        category="social",
+        exists=True,
+        status="found",
+        profile_data={"username": "Alice"},
+    )
+    mismatch = PlatformResult(
+        platform=platform.name,
+        url="https://official.test/alice",
+        category="social",
+        exists=True,
+        status="found",
+        confidence=1.0,
+        profile_data={"username": "alice-other"},
+    )
+
+    cfg = ScanConfig(username="alice")
+    _evaluate_platform_result(matching, platform, cfg, deep_scraped=True)
+    _evaluate_platform_result(mismatch, platform, cfg, deep_scraped=True)
+
+    assert matching.exists is True
+    assert matching.probe_outcome == "found"
+    assert matching.contract_verified is True
+    assert mismatch.exists is False
+    assert mismatch.status == "contract_mismatch"
+    assert mismatch.probe_outcome == "contract_broken"
+    assert mismatch.verification["verdict"] == "uncertain"
+
+
+@pytest.mark.asyncio
+async def test_disabled_provider_returns_typed_unavailable_without_network():
+    class _NoNetwork:
+        def __getattr__(self, _name):
+            raise AssertionError("disabled provider attempted network access")
+
+    platform = Platform(
+        name="Disabled",
+        url="https://disabled.test/{username}",
+        category="social",
+        evidence_class="disabled",
+        lookup_semantics="disabled",
+        auth_mode="required",
+        automated=False,
+    )
+    cfg = ScanConfig(username="alice")
+    result = await _check_platform(_NoNetwork(), cfg, platform)
+    _evaluate_platform_result(result, platform, cfg)
+
+    assert result.status == "unavailable_auth"
+    assert result.probe_outcome == "unavailable_auth"
+    assert result.verification["verdict"] == "uncertain"
 
 
 class TestSelectPlatforms:
@@ -121,7 +219,7 @@ class _HTMLClient:
 
 
 @pytest.mark.asyncio
-async def test_check_platform_marks_login_wall_as_not_found():
+async def test_check_platform_marks_login_wall_as_unavailable():
     body = """
     <html><head><title>alice profile</title></head>
     <body>You must log in to view this profile.</body></html>
@@ -136,7 +234,7 @@ async def test_check_platform_marks_login_wall_as_not_found():
     result = await _check_platform(_HTMLClient(200, body), ScanConfig(username="alice"), platform)
 
     assert result.exists is False
-    assert result.status == "login_required"
+    assert result.status == "unavailable_auth"
     assert result.fp_signals == ["login_required"]
 
 
@@ -188,6 +286,7 @@ async def test_run_scan_minimal_category_filter():
         dns=False,
         subdomain=False,
         categories=("dev",),
+        no_auto_render=True,
     )
     dev_platforms = [p for p in PLATFORMS if p.category == "dev"]
 
@@ -209,6 +308,7 @@ async def test_run_scan_with_deep_scrape():
     cfg = ScanConfig(
         username="alice",
         deep=True,
+        smart=False,
         categories=("dev",),
     )
     dev_platforms = [p for p in PLATFORMS if p.category == "dev"]
@@ -220,7 +320,7 @@ async def test_run_scan_with_deep_scrape():
         m.get(
             "https://api.github.com/users/alice",
             status=200,
-            payload={"name": "Alice", "location": "TR"},
+            payload={"login": "alice", "name": "Alice", "location": "TR"},
             repeat=True,
         )
         for p in dev_platforms:
@@ -246,6 +346,7 @@ async def test_run_scan_email_without_hibp_skips_breach(monkeypatch):
     cfg = ScanConfig(
         username="alice",
         deep=False,
+        smart=False,
         email=True,
         breach=True,
         categories=("dev",),
@@ -272,8 +373,10 @@ async def test_phase_smart_search_checks_variations_with_scan_config(monkeypatch
         Platform(
             name="GitHub",
             url="https://fake.test/{username}",
-            category="dev",
-            check_type="status",
+                category="dev",
+                check_type="status",
+                evidence_class="official_exact",
+                lookup_semantics="exact",
         ),
     ]
     platform_results = [
@@ -297,6 +400,7 @@ async def test_phase_smart_search_checks_variations_with_scan_config(monkeypatch
             exists=cfg_arg.username == "alice",
             confidence=1.0,
             status="found",
+            profile_data={"username": cfg_arg.username},
         )
 
     monkeypatch.setattr(engine_mod, "_check_platform", fake_check_platform)
@@ -310,7 +414,9 @@ async def test_phase_smart_search_checks_variations_with_scan_config(monkeypatch
     )
 
     assert "alice" in checked  # stripped trailing digits
-    assert any(r.status == "found (variation)" for r in result.platforms)
+    assert not any(r.status == "found (variation)" for r in result.platforms)
+    assert result.identity_candidates[0].username == "alice"
+    assert result.identity_candidates[0].profiles[0].status == "found (variation)"
 
 
 @pytest.mark.asyncio
@@ -321,7 +427,8 @@ async def test_phase_recursive_pivots_on_discovered_username(monkeypatch):
     cfg = ScanConfig(username="alice", recursive=True, recursive_depth=1, fp_threshold=0.0)
     platforms = [
         Platform(name="FakeNet", url="https://fake.test/{username}", category="social",
-                 check_type="status"),
+                 check_type="status", evidence_class="official_exact",
+                 lookup_semantics="exact"),
     ]
     seed = PlatformResult(
         platform="GitHub", url="https://gh/alice", category="dev",
@@ -340,8 +447,9 @@ async def test_phase_recursive_pivots_on_discovered_username(monkeypatch):
             url=platform.url.replace("{username}", cfg_arg.username),
             category=platform.category,
             exists=True,
-            confidence=1.0,
-            status="found",
+                confidence=1.0,
+                status="found",
+                profile_data={"username": cfg_arg.username},
         )
 
     monkeypatch.setattr(engine_mod, "_check_platform", fake_check_platform)
@@ -510,7 +618,9 @@ async def test_phase_recon_populates_leaked_secrets(monkeypatch):
 
     payload = result.to_dict()
     assert "leaked_secrets" in payload
-    assert payload["leaked_secrets"][0]["value"] == "AKIAIOSFODNN7XAAAAAA"
+    assert "value" not in payload["leaked_secrets"][0]
+    assert payload["leaked_secrets"][0]["fingerprint"]
+    assert payload["leaked_secrets"][0]["safe_preview"].startswith("[REDACTED")
 
 
 @pytest.mark.asyncio

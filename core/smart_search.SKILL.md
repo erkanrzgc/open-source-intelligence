@@ -1,11 +1,13 @@
 ---
-name: smart_search
-description: Username variation generator and linked-account harvester.
+name: smart-search
+description: Ranked alias candidate generator and linked-account harvester.
 inputs:
-  username: str (for generate_variations)
+  username: str (for generate_candidates / generate_variations)
+  linked_usernames: Iterable[str]
   profile_data: dict (for extract_discoverable_data)
   list[dict] (for merge_discoveries)
 outputs:
+  generate_candidates: list[UsernameCandidate]
   generate_variations: list[str]
   extract_discoverable_data: {names, emails, locations, linked_usernames, urls}
   merge_discoveries: same shape, merged across profiles
@@ -17,14 +19,20 @@ dependencies:
 ai_required: false  # augmented by the handle-generator module and skill when cfg.full_name is set
 ---
 
-## generate_variations rules
+## Candidate ranking
 
-* Separator mutations: split on `._-`, rejoin with each.
-* Reversed order: `john_doe` → `doe_john`.
-* Trim trailing digits: `alice123` → `alice`.
-* Strip leading/trailing `_.-`.
-* Common suffix decorations: `_`, `0`, `1`, `x`, `official`, `real`, `dev`.
-* Common prefix decorations: `_`, `x`, `the`, `real`, `its`.
+`generate_candidates` emits at most the requested limit, ordered by:
+
+1. Direct profile-linked handles.
+2. Last-character repeat/removal.
+3. One deletion or adjacent transposition.
+4. Separator mutations.
+5. Short numeric suffix mutations.
+6. One leet substitution.
+7. Limited `real`, `official`, `dev` affixes.
+
+Each row carries Damerau-Levenshtein similarity, source confidence and
+auditable reason codes. `generate_variations` is the sorted legacy string view.
 
 ## What this is NOT
 
@@ -44,5 +52,15 @@ Reads structured fields out of profile dicts:
 * linked_usernames: `twitter_username`, `github_username`, Keybase proofs
 * urls: `blog`, `website_url`, `web_url`, `links` + URLs in bio text
 
-The engine's recursive phase uses `linked_usernames` to find pivot
-handles to probe.
+The engine probes the first 12 candidates across the 15 catalogued
+`alias_probe` platforms. If that tier produces no `likely_same` or
+`confirmed_same` verdict, candidates 13–24 are probed on the first 5
+alias platforms. The adaptive fan-out is capped at 240 profile probes.
+Confirmed profiles become `identity_candidates`; transport/login/soft-404
+uncertainty stays in diagnostics.
+
+Confirmation is fail-closed against the provider catalogue contract. The
+platform must declare an official/public exact lookup and the returned
+canonical username must match the probed candidate. Search results, internal
+APIs, third-party probes, page hydration parsers and disabled/auth-gated
+providers cannot create an identity candidate.

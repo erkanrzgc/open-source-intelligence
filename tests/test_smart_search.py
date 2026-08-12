@@ -2,9 +2,34 @@
 
 from core.smart_search import (
     extract_discoverable_data,
+    generate_candidates,
     generate_variations,
     merge_discoveries,
 )
+
+
+class TestGenerateCandidates:
+    def test_ranked_candidates_are_deterministic_unique_and_bounded(self):
+        first = generate_candidates("erkanrzgc")
+        second = generate_candidates("erkanrzgc")
+
+        assert first == second
+        assert len(first) == 12
+        assert len({candidate.username for candidate in first}) == len(first)
+        assert all(candidate.username != "erkanrzgc" for candidate in first)
+        assert first[0].username == "erkanrzgcc"
+        assert first[0].discovery_reasons == ("repeat_last_character",)
+
+    def test_profile_linked_handle_has_highest_source_priority(self):
+        candidates = generate_candidates(
+            "erkanrzgc",
+            linked_usernames=("publicly-linked-alias",),
+            max_candidates=3,
+        )
+
+        assert candidates[0].username == "publicly-linked-alias"
+        assert candidates[0].source_confidence == 1.0
+        assert candidates[0].discovery_reasons == ("linked_profile",)
 
 
 class TestGenerateVariations:

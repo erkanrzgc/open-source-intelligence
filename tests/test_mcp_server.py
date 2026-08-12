@@ -22,6 +22,13 @@ async def test_tools_list():
     tools = resp["result"]["tools"]
     assert any(t["name"] == "scan_username" for t in tools)
     assert any(t["name"] == "get_scan" for t in tools)
+    scan_tool = next(t for t in tools if t["name"] == "scan_username")
+    properties = scan_tool["inputSchema"]["properties"]
+    assert properties["smart"]["default"] is True
+    assert properties["platform_scope"]["default"] == "core"
+    assert properties["alias_max_candidates"]["maximum"] == 24
+    assert properties["alias_max_candidates"]["default"] == 24
+    assert properties["alias_platform_limit"]["maximum"] == 15
 
 
 @pytest.mark.asyncio
@@ -94,6 +101,42 @@ async def test_tools_call_scan(monkeypatch):
     content = resp["result"]["content"][0]["text"]
     assert '"username": "alice"' in content
     assert '"schema_version"' in content
+
+
+@pytest.mark.asyncio
+async def test_tools_call_scan_maps_identity_configuration(monkeypatch):
+    captured = []
+
+    async def fake_run_scan(cfg):
+        captured.append(cfg)
+        return ScanResult(username=cfg.username)
+
+    monkeypatch.setattr(mcp_server, "run_scan", fake_run_scan)
+    resp = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 61,
+            "method": "tools/call",
+            "params": {
+                "name": "scan_username",
+                "arguments": {
+                    "username": "alice",
+                    "smart": False,
+                    "platform_scope": "full",
+                    "alias_max_candidates": 4,
+                    "alias_platform_limit": 7,
+                },
+            },
+        }
+    )
+
+    assert resp is not None and "result" in resp
+    assert len(captured) == 1
+    cfg = captured[0]
+    assert cfg.smart is False
+    assert cfg.platform_scope == "full"
+    assert cfg.alias_max_candidates == 4
+    assert cfg.alias_platform_limit == 7
 
 
 @pytest.mark.asyncio

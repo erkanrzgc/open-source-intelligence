@@ -22,7 +22,6 @@ from aioresponses import aioresponses
 from core.http_client import HTTPClient
 from modules.passive import intelx
 
-
 # ── Pure helpers ────────────────────────────────────────────────────
 
 

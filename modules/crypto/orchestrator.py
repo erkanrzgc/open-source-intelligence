@@ -23,7 +23,7 @@ async def _safe(
 ) -> CryptoIntel | None:
     try:
         return await coro
-    except Exception as exc:  # noqa: BLE001 - best-effort
+    except Exception as exc:
         log.debug("crypto source %s failed: %s", name, exc)
         return None
 
