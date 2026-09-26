@@ -16,6 +16,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.live import Live
@@ -24,10 +25,21 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from core import history
 from core.config import REQUEST_TIMEOUT, ScanConfig
 from core.engine import run_scan
 from core.models import ScanResult
 from core.platform_loader import CATEGORY_LABELS
+from core.reporter import (
+    export_csv,
+    export_html,
+    export_json,
+    export_misp,
+    export_obsidian,
+    export_pdf,
+    export_stix,
+)
+from core.scan_service import complete_scan_result
 from modules.platforms import PLATFORMS
 
 console = Console()
@@ -156,6 +168,42 @@ def _show_result(result: ScanResult, elapsed: float, log_file: Path | None) -> N
         console.print(email_table)
         console.print()
 
+    if result.phone_intel:
+        phone_table = Table(title="Phone Intel", border_style="cyan")
+        phone_table.add_column("Input")
+        phone_table.add_column("Country")
+        phone_table.add_column("Carrier")
+        phone_table.add_column("Line Type")
+        phone_table.add_column("Valid")
+        for p_item in result.phone_intel:
+            p_row = p_item.to_dict() if hasattr(p_item, "to_dict") else p_item
+            phone_table.add_row(
+                str(p_row.get("input", "")),
+                str(p_row.get("country", "")),
+                str(p_row.get("carrier", "")),
+                str(p_row.get("line_type", "")),
+                "Yes" if p_row.get("valid") else "No",
+            )
+        console.print(phone_table)
+        console.print()
+
+    if result.crypto_intel:
+        crypto_table = Table(title="Crypto Intel", border_style="green")
+        crypto_table.add_column("Address")
+        crypto_table.add_column("Network")
+        crypto_table.add_column("Balance")
+        crypto_table.add_column("Tx Count")
+        for c_item in result.crypto_intel:
+            c_row = c_item.to_dict() if hasattr(c_item, "to_dict") else c_item
+            crypto_table.add_row(
+                str(c_row.get("address", ""))[:30],
+                str(c_row.get("network", "")),
+                str(c_row.get("balance", "0")),
+                str(c_row.get("total_txs", 0)),
+            )
+        console.print(crypto_table)
+        console.print()
+
     if log_file:
         console.print(f"[bold]Saved:[/bold] {log_file}")
     else:
@@ -274,10 +322,11 @@ async def _interactive() -> int:
         elapsed = time.monotonic() - t0
         progress.update(task, completed=100, total=100, description="Done")
 
+    completed = complete_scan_result(result, cfg, save_history=True)
     log_file = _log_path(username)
 
     log_file.write_text(
-        json.dumps(result.to_dict(include_all=True), ensure_ascii=False, indent=2),
+        json.dumps(completed.payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -285,12 +334,189 @@ async def _interactive() -> int:
     return 0
 
 
+def _handle_exports(result: ScanResult, args: argparse.Namespace) -> None:
+    if getattr(args, "export_html", None):
+        try:
+            export_html(result, args.export_html)
+        except Exception as exc:
+            console.print(f"[red]HTML export error: {exc}[/red]")
+    if getattr(args, "export_pdf", None):
+        try:
+            export_pdf(result, args.export_pdf)
+        except Exception as exc:
+            console.print(f"[red]PDF export error: {exc}[/red]")
+    if getattr(args, "export_csv", None):
+        try:
+            export_csv(result, args.export_csv)
+        except Exception as exc:
+            console.print(f"[red]CSV export error: {exc}[/red]")
+    if getattr(args, "export_stix", None):
+        try:
+            export_stix(result, args.export_stix)
+        except Exception as exc:
+            console.print(f"[red]STIX export error: {exc}[/red]")
+    if getattr(args, "export_misp", None):
+        try:
+            export_misp(result, args.export_misp)
+        except Exception as exc:
+            console.print(f"[red]MISP export error: {exc}[/red]")
+    if getattr(args, "export_obsidian", None):
+        try:
+            export_obsidian(result, args.export_obsidian)
+        except Exception as exc:
+            console.print(f"[red]Obsidian export error: {exc}[/red]")
+    if getattr(args, "export_json", None):
+        try:
+            export_json(result, args.export_json)
+        except Exception as exc:
+            console.print(f"[red]JSON export error: {exc}[/red]")
+
+
+def _cli_export(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="osint export",
+        description="Export a previous scan result to HTML, PDF, CSV, STIX, MISP, or Obsidian",
+    )
+    parser.add_argument("target", help="Scan JSON file path, scan ID from history, or username")
+    parser.add_argument(
+        "--format", "-f",
+        choices=["html", "pdf", "csv", "stix", "misp", "obsidian", "json"],
+        required=True,
+        help="Target export format",
+    )
+    parser.add_argument(
+        "--output", "-o",
+        required=True,
+        help="Destination file path (or directory path for obsidian)",
+    )
+    args = parser.parse_args(argv)
+
+    target_path = Path(args.target)
+    payload: dict[str, Any] | None = None
+
+    if target_path.is_file():
+        try:
+            payload = json.loads(target_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            console.print(f"[red]Failed to read JSON file {target_path}: {exc}[/red]")
+            return 1
+    elif args.target.isdigit():
+        entry = history.get_scan(int(args.target))
+        if entry is None:
+            console.print(f"[red]No scan found in history with ID {args.target}[/red]")
+            return 1
+        payload = entry.payload
+    else:
+        entry = history.get_latest(args.target)
+        if entry is None:
+            console.print(f"[red]No scan found in history for username {args.target!r}[/red]")
+            return 1
+        payload = entry.payload
+
+    if not isinstance(payload, dict):
+        console.print("[red]Invalid scan payload[/red]")
+        return 1
+
+    result = ScanResult.from_dict(payload)
+
+    try:
+        if args.format == "html":
+            export_html(result, args.output)
+        elif args.format == "pdf":
+            export_pdf(result, args.output)
+        elif args.format == "csv":
+            export_csv(result, args.output)
+        elif args.format == "stix":
+            export_stix(result, args.output)
+        elif args.format == "misp":
+            export_misp(result, args.output)
+        elif args.format == "obsidian":
+            export_obsidian(result, args.output)
+        elif args.format == "json":
+            export_json(result, args.output)
+    except Exception as exc:
+        console.print(f"[red]Export failed: {exc}[/red]")
+        return 1
+
+    return 0
+
+
+def _cli_history(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="osint history",
+        description="Search or view previous OSINT scans",
+    )
+    parser.add_argument("query", nargs="?", help="Username or natural language semantic search query")
+    parser.add_argument("--semantic", "-s", action="store_true", help="Perform natural language semantic search")
+    parser.add_argument("--limit", "-n", type=int, default=10, help="Maximum number of results to display")
+    args = parser.parse_args(argv)
+
+    if not args.query:
+        scans = history.list_scans(limit=args.limit)
+        if not scans:
+            console.print("[dim]No previous scans found in history.[/dim]")
+            return 0
+        table = Table(title="Recent OSINT Scans")
+        table.add_column("ID", style="cyan")
+        table.add_column("Username", style="bold green")
+        table.add_column("Found", justify="right")
+        table.add_column("Date", style="dim")
+        for s in scans:
+            date_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(s.ts))
+            table.add_row(str(s.id), s.username, str(s.found_count), date_str)
+        console.print(table)
+        return 0
+
+    if args.semantic:
+        results = history.search_scans_semantic(args.query, limit=args.limit)
+        if not results:
+            console.print(f"[yellow]No matching scans found for semantic query: {args.query!r}[/yellow]")
+            return 0
+        table = Table(title=f"Semantic Search Results for: {args.query}")
+        table.add_column("ID", style="cyan")
+        table.add_column("Username", style="bold green")
+        table.add_column("Relevance", justify="right", style="bold yellow")
+        table.add_column("Found", justify="right")
+        table.add_column("Date", style="dim")
+        for r in results:
+            date_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"]))
+            table.add_row(
+                str(r["id"]),
+                r["username"],
+                f"{r.get('similarity_score', 0):.1%}",
+                str(r["found_count"]),
+                date_str,
+            )
+        console.print(table)
+        return 0
+    else:
+        scans = [s for s in history.list_scans(limit=100) if args.query.lower() in s.username.lower()][:args.limit]
+        if not scans:
+            console.print(f"[yellow]No scans found matching username {args.query!r}[/yellow]")
+            return 0
+        table = Table(title=f"Scans matching '{args.query}'")
+        table.add_column("ID", style="cyan")
+        table.add_column("Username", style="bold green")
+        table.add_column("Found", justify="right")
+        table.add_column("Date", style="dim")
+        for s in scans:
+            date_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(s.ts))
+            table.add_row(str(s.id), s.username, str(s.found_count), date_str)
+        console.print(table)
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
-    if argv and argv[0] == "scan":
-        return _cli_scan(argv[1:])
+    if argv:
+        if argv[0] == "scan":
+            return _cli_scan(argv[1:])
+        if argv[0] == "export":
+            return _cli_export(argv[1:])
+        if argv[0] == "history":
+            return _cli_history(argv[1:])
 
     return asyncio.run(_interactive())
 
@@ -322,12 +548,43 @@ def _cli_scan(argv: list[str]) -> int:
     parser.add_argument("--breach", action="store_true")
     parser.add_argument("--photo", action="store_true")
     parser.add_argument("--whois", action="store_true")
+    parser.add_argument("--dns", action="store_true", help="Perform DNS record enumeration")
+    parser.add_argument("--subdomain", action="store_true", help="Enumerate subdomains via crt.sh")
+    parser.add_argument("--passive", action="store_true", help="Search passive threat and search intelligence")
+    parser.add_argument("--passive-domain", help="Target domain for passive reconnaissance")
+    parser.add_argument("--reverse-image", action="store_true", help="Search reverse image engines for avatar")
+    parser.add_argument("--past-usernames", action="store_true", help="Mine Wayback for historical handles")
+    parser.add_argument("--phone", help="Target phone number (e.g. +14155552671)")
+    parser.add_argument("--phone-region", help="2-letter region code for phone parsing (e.g. US, TR)")
+    parser.add_argument("--crypto", help="Crypto wallet addresses, comma-separated")
+    parser.add_argument("--recon-domain", help="Corporate domain for red-team recon")
+    parser.add_argument("--recon-names", help="Path to employee names file for email permutations")
+    parser.add_argument("--recon-github-org", help="GitHub org to harvest committer emails from")
+    parser.add_argument("--gitleaks", help="Local paths to scan with gitleaks, comma-separated")
+    parser.add_argument("--geocode", action="store_true", help="Geocode extracted profile locations")
+    parser.add_argument("--tor", action="store_true", help="Route requests through local Tor proxy")
+    parser.add_argument("--proxy", help="HTTP or SOCKS proxy URL")
+    parser.add_argument("--playwright", action="store_true", help="Enable Playwright browser fallback")
+    parser.add_argument("--screenshots", action="store_true", help="Capture profile screenshots")
+    parser.add_argument("--screenshot-dir", help="Output directory for screenshots")
+    parser.add_argument("--export-html", help="Path to export HTML report")
+    parser.add_argument("--export-pdf", help="Path to export PDF report")
+    parser.add_argument("--export-csv", help="Path to export CSV zip bundle")
+    parser.add_argument("--export-stix", help="Path to export STIX 2.1 JSON bundle")
+    parser.add_argument("--export-misp", help="Path to export MISP event JSON")
+    parser.add_argument("--export-obsidian", help="Directory path to export Obsidian notes")
+    parser.add_argument("--export-json", help="Path to export JSON payload")
     parser.add_argument("--categories")
     parser.add_argument("--timeout", type=int, default=REQUEST_TIMEOUT)
     parser.add_argument(
         "--ai",
         action="store_true",
         help="Opt in to LLM validation and the executive summary skill",
+    )
+    parser.add_argument(
+        "--ai-correlate",
+        action="store_true",
+        help="Synthesize cross-platform identities with the AI correlator skill",
     )
     parser.add_argument(
         "--allow-private-networks",
@@ -352,6 +609,17 @@ def _cli_scan(argv: list[str]) -> int:
     elif args.verified:
         categories = ("__verified__",)
 
+    crypto_list = (
+        tuple(c.strip() for c in args.crypto.split(",") if c.strip())
+        if args.crypto
+        else ()
+    )
+    gitleaks_list = (
+        tuple(p.strip() for p in args.gitleaks.split(",") if p.strip())
+        if args.gitleaks
+        else ()
+    )
+
     cfg = ScanConfig(
         username=args.username,
         full_name=args.full_name,
@@ -362,6 +630,25 @@ def _cli_scan(argv: list[str]) -> int:
         breach=args.breach or args.email,
         photo=args.photo,
         whois=args.whois,
+        dns=args.dns,
+        subdomain=args.subdomain,
+        passive=args.passive,
+        passive_domain=args.passive_domain,
+        reverse_image=args.reverse_image,
+        past_usernames=args.past_usernames,
+        phone=args.phone,
+        phone_region=args.phone_region,
+        crypto_addresses=crypto_list,
+        redteam_domain=args.recon_domain,
+        redteam_names_file=args.recon_names,
+        redteam_github_org=args.recon_github_org,
+        gitleaks_paths=gitleaks_list,
+        geocode=args.geocode,
+        tor=args.tor,
+        proxy=args.proxy,
+        playwright=args.playwright,
+        screenshots=args.screenshots,
+        screenshot_dir=args.screenshot_dir,
         categories=categories,
         platform_scope=platform_scope,
         alias_max_candidates=args.alias_max_candidates,
@@ -369,13 +656,16 @@ def _cli_scan(argv: list[str]) -> int:
         request_timeout=args.timeout,
         ai_skills=args.ai,
         ai_report=args.ai,
+        ai_correlate=args.ai_correlate or args.ai,
         allow_private_networks=args.allow_private_networks,
     )
 
-    return asyncio.run(_run_scan_fast(cfg))
+    return asyncio.run(_run_scan_fast(cfg, args))
 
 
-async def _run_scan_fast(cfg: ScanConfig) -> int:
+async def _run_scan_fast(
+    cfg: ScanConfig, args: argparse.Namespace | None = None
+) -> int:
     platforms = _selected_platforms(cfg.categories, cfg.platform_scope)
     _print_header(cfg.username, cfg.full_name, len(platforms))
 
@@ -393,14 +683,18 @@ async def _run_scan_fast(cfg: ScanConfig) -> int:
         elapsed = time.monotonic() - t0
         progress.update(task, completed=100, total=100, description="Done")
 
+    completed = complete_scan_result(result, cfg, save_history=True)
     log_file = _log_path(cfg.username)
     log_file.write_text(
-        json.dumps(result.to_dict(include_all=True), ensure_ascii=False, indent=2),
+        json.dumps(completed.payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
     _show_result(result, elapsed, log_file)
+    if args is not None:
+        _handle_exports(result, args)
     return 0
+
 
 
 if __name__ == "__main__":

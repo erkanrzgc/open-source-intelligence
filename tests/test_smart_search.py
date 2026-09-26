@@ -128,3 +128,34 @@ class TestMergeDiscoveries:
     def test_empty(self):
         result = merge_discoveries([])
         assert result["names"] == []
+
+
+class TestLinguisticExpansion:
+    def test_expand_consonant_clusters_vowels(self):
+        from core.smart_search import expand_consonant_clusters
+        expanded = expand_consonant_clusters("erkanrzgc")
+        assert "erkanrizgic" in expanded
+
+    def test_discovered_names_generate_candidates(self):
+        candidates = generate_candidates(
+            "erkan",
+            names=("Erkan Rizgic",),
+            max_candidates=20,
+        )
+        usernames = {c.username for c in candidates}
+        assert "erkanrizgic" in usernames
+        cand = next(c for c in candidates if c.username == "erkanrizgic")
+        assert "discovered_name" in cand.discovery_reasons
+
+    def test_double_character_repeat(self):
+        candidates = generate_candidates("erkanrzgc", max_candidates=24)
+        usernames = {c.username for c in candidates}
+        assert "erkanrzgcc" in usernames
+        assert "erkanrzgccc" in usernames
+
+    def test_vowel_expansion_in_candidates(self):
+        candidates = generate_candidates("rzgc", max_candidates=24)
+        usernames = {c.username for c in candidates}
+        assert "rizgic" in usernames
+        cand = next(c for c in candidates if c.username == "rizgic")
+        assert "vowel_expansion" in cand.discovery_reasons

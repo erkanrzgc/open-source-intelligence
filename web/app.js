@@ -205,6 +205,32 @@ function renderInvestigatorSummary(payload) {
     block.appendChild(list);
     briefActionsBySeverity.appendChild(block);
   }
+  updateExportLinks(payload);
+}
+
+function updateExportLinks(payload) {
+  const panel = document.getElementById("export-panel");
+  if (!panel || !payload) return;
+  const username = payload.username || "";
+  if (!username) {
+    panel.style.display = "none";
+    return;
+  }
+  panel.style.display = "block";
+  const scanId = payload.scan_id;
+  const baseUrl = scanId ? `/export/scan/${encodeURIComponent(scanId)}` : `/export/${encodeURIComponent(username)}/latest`;
+  const token = localStorage.getItem("osint_token");
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
+
+  const htmlLink = document.getElementById("export-html");
+  const jsonLink = document.getElementById("export-json");
+  const csvLink = document.getElementById("export-csv");
+  const stixLink = document.getElementById("export-stix");
+
+  if (htmlLink) htmlLink.href = `${baseUrl}?format=html${tokenParam}`;
+  if (jsonLink) jsonLink.href = `${baseUrl}?format=json${tokenParam}`;
+  if (csvLink) csvLink.href = `${baseUrl}?format=csv${tokenParam}`;
+  if (stixLink) stixLink.href = `${baseUrl}?format=stix${tokenParam}`;
 }
 
 function renderIdentityCandidates(candidates) {

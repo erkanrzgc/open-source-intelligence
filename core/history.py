@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -251,3 +252,133 @@ def diff_entries(old: HistoryEntry, new: HistoryEntry) -> DiffResult:
         removed=sorted(old_names - new_names),
         unchanged=sorted(old_names & new_names),
     )
+
+
+def prune_history(max_age_seconds: int, *, db_path: Path = DEFAULT_DB_PATH) -> int:
+    """Delete scans older than max_age_seconds from now. Returns deleted count."""
+    if not db_path.exists():
+        return 0
+    cutoff = int(time.time()) - max_age_seconds
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute("DELETE FROM scans WHERE ts < ?", (cutoff,))
+        conn.commit()
+        return cur.rowcount
+    except sqlite3.Error as exc:
+        log.warning("history: prune_history failed on %s: %s", db_path, exc)
+        return 0
+    finally:
+        conn.close()
+
+
+def prune_provider_data(
+    provider: str,
+    max_age_seconds: int = 172800,
+    *,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> int:
+    """Redact provider-specific profile details for scans older than max_age_seconds.
+
+    Enforces data retention compliance (e.g. Reddit 48h data retention recommendation)
+    without destroying the entire scan history record.
+    Returns count of updated scan records.
+    """
+    if not db_path.exists():
+        return 0
+    cutoff = int(time.time()) - max_age_seconds
+    conn = _connect(db_path)
+    updated_count = 0
+    try:
+        rows = conn.execute(
+            "SELECT id, payload FROM scans WHERE ts < ?", (cutoff,)
+        ).fetchall()
+        for scan_id, payload_raw in rows:
+            try:
+                payload = json.loads(payload_raw)
+            except Exception:
+                continue
+            modified = False
+            for p in payload.get("platforms", []):
+                if p.get("platform", "").casefold() == provider.casefold():
+                    if p.get("profile_data"):
+                        p["profile_data"] = {"retention_redacted": True}
+                        modified = True
+            for c in payload.get("identity_candidates", []):
+                if c.get("platform", "").casefold() == provider.casefold():
+                    if c.get("profile"):
+                        c["profile"] = {"retention_redacted": True}
+                        modified = True
+            if modified:
+                conn.execute(
+                    "UPDATE scans SET payload = ? WHERE id = ?",
+                    (json.dumps(payload, ensure_ascii=False), scan_id),
+                )
+                updated_count += 1
+        conn.commit()
+        return updated_count
+    except sqlite3.Error as exc:
+        log.warning("history: prune_provider_data failed on %s: %s", db_path, exc)
+        return 0
+    finally:
+        conn.close()
+
+
+def search_scans_semantic(
+    query: str,
+    *,
+    limit: int = 10,
+    min_score: float = 0.05,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """Search historical scans by natural language semantic relevance.
+
+    Extracts biographical text from stored scan payloads and ranks them
+    against the query using subword cosine similarity.
+    """
+    if not query.strip() or not db_path.exists():
+        return []
+    from core.semantic_matcher import extract_profile_corpus, rank_by_similarity
+
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, username, ts, found_count, payload FROM scans ORDER BY ts DESC LIMIT 200"
+        ).fetchall()
+        if not rows:
+            return []
+        parsed_entries = []
+        corpora = []
+        for row in rows:
+            scan_id, username, ts, found_count, payload_raw = row
+            try:
+                payload = json.loads(payload_raw)
+            except Exception:
+                payload = {}
+            corpus = extract_profile_corpus(payload)
+            corpora.append(corpus)
+            parsed_entries.append({
+                "id": scan_id,
+                "username": username,
+                "ts": ts,
+                "found_count": found_count,
+                "payload": payload,
+            })
+
+        ranked = rank_by_similarity(query, corpora)
+        results = []
+        for idx, score in ranked:
+            if score < min_score:
+                continue
+            entry = parsed_entries[idx]
+            entry["similarity_score"] = score
+            results.append(entry)
+            if len(results) >= limit:
+                break
+        return results
+    except sqlite3.Error as exc:
+        log.warning("history: semantic search failed on %s: %s", db_path, exc)
+        return []
+    finally:
+        conn.close()
+
+

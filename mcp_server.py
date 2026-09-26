@@ -25,6 +25,7 @@ from core import cases, watchlist
 from core.config import ScanConfig
 from core.engine import run_scan
 from core.history import get_latest, get_scan, list_scans
+from core.models import ScanResult
 from core.scan_service import complete_scan_result
 from core.version import __version__
 from utils.helpers import sanitize_username
@@ -144,6 +145,89 @@ TOOLS = [
                 "commits_per_repo": {"type": "integer", "default": 30},
             },
             "required": ["domain"],
+        },
+    },
+    {
+        "name": "scan_phone",
+        "description": "Analyze a phone number for country, carrier, line type, and validation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "phone": {"type": "string", "description": "Target phone number (e.g. +14155552671)"},
+                "region": {"type": "string", "description": "Optional default 2-letter region code (e.g. US, TR)"},
+            },
+            "required": ["phone"],
+        },
+    },
+    {
+        "name": "scan_crypto",
+        "description": "Inspect cryptocurrency wallet addresses (Bitcoin, Ethereum) for balances and transactions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "addresses": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Cryptocurrency wallet addresses",
+                },
+            },
+            "required": ["addresses"],
+        },
+    },
+    {
+        "name": "scan_email",
+        "description": "Perform an email-first breach, Gravatar, Holehe, and Google account footprint scan.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "description": "Target email address"},
+                "holehe": {"type": "boolean", "default": True},
+                "ghunt": {"type": "boolean", "default": True},
+            },
+            "required": ["email"],
+        },
+    },
+    {
+        "name": "manage_case",
+        "description": "Create a case, add an investigator note, or bookmark a discovered artifact/target.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "add_note", "add_bookmark", "get"],
+                    "description": "Action to perform",
+                },
+                "case_id": {"type": "integer", "description": "Case ID (for add_note, add_bookmark, get)"},
+                "name": {"type": "string", "description": "Case name (for create)"},
+                "description": {"type": "string", "description": "Case description (for create)"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "body": {"type": "string", "description": "Note body (for add_note)"},
+                "author": {"type": "string", "description": "Note author (for add_note)"},
+                "target_type": {"type": "string", "description": "Bookmark target type (for add_bookmark)"},
+                "target_value": {"type": "string", "description": "Bookmark target value (for add_bookmark)"},
+                "label": {"type": "string", "description": "Bookmark label (for add_bookmark)"},
+                "scan_id": {"type": "integer", "description": "Associated scan ID (for add_bookmark)"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "export_scan",
+        "description": "Export a scan payload or history entry into HTML, PDF, CSV, STIX, MISP, or Obsidian format.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "output_path": {"type": "string", "description": "Destination file path (or directory for obsidian)"},
+                "format": {
+                    "type": "string",
+                    "enum": ["html", "pdf", "csv", "stix", "misp", "obsidian", "json"],
+                    "default": "html",
+                },
+                "scan_id": {"type": "integer", "description": "History scan ID"},
+                "username": {"type": "string", "description": "Fallback: latest scan for username"},
+            },
+            "required": ["output_path"],
         },
     },
 ]
@@ -314,6 +398,174 @@ async def _redteam_recon(args: dict) -> dict:
     }
 
 
+async def _scan_phone(args: dict) -> dict:
+    from core.http_client import HTTPClient
+    from modules.phone.orchestrator import lookup_phone
+
+    phone = args.get("phone")
+    if not isinstance(phone, str) or not phone.strip():
+        raise ValueError("phone must be a non-empty string")
+    region = args.get("region")
+    region_str = str(region).strip() if region else None
+
+    async with HTTPClient() as client:
+        intel = await lookup_phone(client, phone.strip(), default_region=region_str)
+        if intel is None:
+            return {"valid": False, "raw": phone, "error": "unparsable phone number"}
+        return intel.to_dict()
+
+
+async def _scan_crypto(args: dict) -> dict:
+    from core.http_client import HTTPClient
+    from modules.crypto.orchestrator import lookup_crypto
+
+    addresses = args.get("addresses") or []
+    if not isinstance(addresses, list) or not addresses:
+        raise ValueError("addresses must be a non-empty list of strings")
+    addr_list = [str(a).strip() for a in addresses if str(a).strip()]
+
+    async with HTTPClient() as client:
+        results = await lookup_crypto(client, addr_list)
+        return {
+            "count": len(results),
+            "results": [r.to_dict() for r in results],
+        }
+
+
+async def _scan_email(args: dict) -> dict:
+    raw = args.get("email")
+    if not isinstance(raw, str) or "@" not in raw:
+        raise ValueError("email must be a valid email address")
+    cfg = ScanConfig(
+        username=raw.split("@", 1)[0],
+        email_only=raw.strip(),
+        email=True,
+        breach=True,
+        holehe=bool(args.get("holehe", True)),
+        ghunt=bool(args.get("ghunt", True)),
+        allow_private_networks=bool(args.get("allow_private_networks", False)),
+    )
+    result = await run_scan(cfg)
+    completed = complete_scan_result(
+        result,
+        cfg,
+        save_history=False,
+        mark_watchlist=False,
+    )
+    return cast(dict, completed.payload)
+
+
+def _manage_case(args: dict) -> dict:
+    action = args.get("action")
+    if action == "create":
+        name = args.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("name is required for creating a case")
+        desc = str(args.get("description") or "")
+        tags = [str(t) for t in args.get("tags") or []]
+        case_obj = cases.create_case(name.strip(), description=desc, tags=tags)
+        return case_obj.to_dict()
+
+    if action == "add_note":
+        case_id = args.get("case_id")
+        if not isinstance(case_id, int):
+            raise ValueError("case_id is required for adding a note")
+        body = args.get("body")
+        if not isinstance(body, str) or not body.strip():
+            raise ValueError("body is required for adding a note")
+        author = str(args.get("author") or "mcp_agent")
+        note = cases.add_note(case_id, body=body.strip(), author=author)
+        return note.to_dict()
+
+    if action == "add_bookmark":
+        case_id = args.get("case_id")
+        if not isinstance(case_id, int):
+            raise ValueError("case_id is required for adding a bookmark")
+        t_type = args.get("target_type")
+        t_val = args.get("target_value")
+        if not isinstance(t_type, str) or not isinstance(t_val, str):
+            raise ValueError("target_type and target_value are required")
+        label = str(args.get("label") or "")
+        tags = [str(t) for t in args.get("tags") or []]
+        scan_id = args.get("scan_id") if isinstance(args.get("scan_id"), int) else None
+        bm = cases.add_bookmark(
+            case_id,
+            target_type=t_type,
+            target_value=t_val,
+            label=label,
+            tags=tags,
+            scan_id=scan_id,
+        )
+        return bm.to_dict()
+
+    if action == "get":
+        case_id = args.get("case_id")
+        if not isinstance(case_id, int):
+            raise ValueError("case_id is required")
+        found_case = cases.get_case(case_id)
+        if found_case is None:
+            raise ValueError(f"case {case_id} not found")
+        notes = cases.list_notes(case_id)
+        bookmarks = cases.list_bookmarks(case_id)
+        out = found_case.to_dict()
+        out["notes"] = [n.to_dict() for n in notes]
+        out["bookmarks"] = [b.to_dict() for b in bookmarks]
+        return out
+
+    raise ValueError(f"unknown action: {action}")
+
+
+def _export_scan(args: dict) -> dict:
+    scan_id = args.get("scan_id")
+    username = args.get("username")
+    fmt = str(args.get("format", "html")).lower()
+    output_path = args.get("output_path")
+    if not isinstance(output_path, str) or not output_path.strip():
+        raise ValueError("output_path must be a non-empty string")
+
+    entry = None
+    if isinstance(scan_id, int):
+        entry = get_scan(scan_id)
+    elif isinstance(username, str) and username.strip():
+        entry = get_latest(username.strip())
+    else:
+        raise ValueError("provide either scan_id or username")
+
+    if entry is None:
+        raise ValueError("scan not found")
+
+    result = ScanResult.from_dict(entry.payload)
+
+    from core.reporter import (
+        export_csv,
+        export_html,
+        export_json,
+        export_misp,
+        export_obsidian,
+        export_pdf,
+        export_stix,
+    )
+
+    if fmt == "html":
+        export_html(result, output_path)
+    elif fmt == "pdf":
+        export_pdf(result, output_path)
+    elif fmt == "csv":
+        export_csv(result, output_path)
+    elif fmt == "stix":
+        export_stix(result, output_path)
+    elif fmt == "misp":
+        export_misp(result, output_path)
+    elif fmt == "obsidian":
+        export_obsidian(result, output_path)
+    elif fmt == "json":
+        export_json(result, output_path)
+    else:
+        raise ValueError(f"unsupported format: {fmt}")
+
+    return {"status": "success", "format": fmt, "path": output_path}
+
+
 async def _dispatch(request: dict) -> dict | None:
     method = request.get("method")
     msg_id = request.get("id")
@@ -341,6 +593,11 @@ async def _dispatch(request: dict) -> dict | None:
             "add_watchlist": _add_watchlist,
             "list_cases": _list_cases,
             "redteam_recon": _redteam_recon,
+            "scan_phone": _scan_phone,
+            "scan_crypto": _scan_crypto,
+            "scan_email": _scan_email,
+            "manage_case": _manage_case,
+            "export_scan": _export_scan,
         }
         handler = handlers.get(str(name))
         if handler is None:

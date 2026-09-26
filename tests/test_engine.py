@@ -891,3 +891,83 @@ async def test_phase_intelx_appends_to_passive_hits(monkeypatch) -> None:
     assert len(result.passive_hits) == 2
     sources = {h.source for h in result.passive_hits}
     assert sources == {"shodan", "intelx"}
+
+
+@pytest.mark.asyncio
+async def test_check_platform_medium_404_url_probe() -> None:
+    from core.platform_loader import load_platforms
+    platforms = load_platforms()
+    medium = next(p for p in platforms if p.name == "Medium")
+
+    class _StubClient:
+        async def get_json(self, url, headers=None):
+            return 404, None, 0.05
+        async def get(self, url, headers=None):
+            return 404, "", 0.05
+
+    cfg = ScanConfig(username="nonexistent_medium_user")
+    res = await _check_platform(_StubClient(), cfg, medium)
+    assert res.exists is False
+    assert res.status == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_check_platform_x_opengraph_title() -> None:
+    from core.platform_loader import load_platforms
+    platforms = load_platforms()
+    x_plat = next(p for p in platforms if p.name == "X")
+
+    html = (
+        '<!DOCTYPE html><html><head><meta property="og:title" content="Erkan (@erkanrzgcc) on X"/></head>'
+        '<body>erkanrzgcc <!-- ' + ('content ' * 100) + ' --></body></html>'
+    )
+
+    class _StubClient:
+        async def get_with_meta(self, url, headers=None):
+            return 200, html, 0.05, url
+
+    cfg = ScanConfig(username="erkanrzgcc", no_auto_render=True)
+    res = await _check_platform(_StubClient(), cfg, x_plat)
+    assert res.exists is True
+    assert res.status == "found"
+
+
+@pytest.mark.asyncio
+async def test_phase_identity_correlate(monkeypatch) -> None:
+    from core.engine import _phase_identity_correlate, ScanContext
+
+    class _StubBackend:
+        def __init__(self, response):
+            self.response = response
+        async def complete(self, system_prompt, user_prompt=None, **kwargs):
+            return self.response
+
+    stub_canned = {
+        "primary_alias": "erkanrzgc",
+        "likely_full_name": "Erkan Rizgic",
+        "confidence": 95,
+        "summary": "Correlated software engineer identity across GitHub and X.",
+        "primary_locations": ["Istanbul"],
+        "primary_occupations": ["Software Engineer"],
+        "correlated_profiles": ["GitHub", "X"],
+        "divergent_profiles": [],
+        "key_findings": ["GitHub links to X @erkanrzgcc"],
+        "recommended_leads": [],
+    }
+
+    import json
+    stub = _StubBackend(json.dumps(stub_canned))
+    monkeypatch.setattr("core.analysis.skill_loader._default_backend", lambda: stub)
+
+    cfg = ScanConfig(username="erkanrzgc", ai_correlate=True)
+    res = ScanResult(username="erkanrzgc")
+    res.platforms = [
+        PlatformResult(platform="GitHub", url="https://github.com/erkanrzgc", category="dev", exists=True, status="found", profile_data={"name": "Erkan Rizgic", "twitter_username": "erkanrzgcc"}),
+    ]
+    context = ScanContext.create(cfg)
+
+    await _phase_identity_correlate(cfg, res, context)
+    assert res.investigator_summary is not None
+    assert res.investigator_summary["primary_alias"] == "erkanrzgc"
+    assert res.investigator_summary["likely_full_name"] == "Erkan Rizgic"
+

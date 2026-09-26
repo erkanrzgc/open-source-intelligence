@@ -544,6 +544,247 @@ class SteamProvider:
         return ProviderBatchResult(observations, request_count)
 
 
+class GitLabProvider:
+    platform_name = "GitLab"
+    evidence_class = "official_exact"
+    entity_scope = "person"
+    contract_revision = "gitlab-users-api-v4"
+    batch_size = 1
+
+    async def lookup_many(
+        self,
+        client: HTTPClient,
+        usernames: Sequence[str],
+        credentials: ProviderCredentials,
+    ) -> ProviderBatchResult:
+        headers = {"Accept": "application/json"}
+        observations: dict[str, ProviderObservation] = {}
+        request_count = 0
+        for username in usernames:
+            status, data, _ = await client.get_json(
+                f"https://gitlab.com/api/v4/users?username={quote(username, safe='')}",
+                headers,
+            )
+            request_count += 1
+            transport = _transport_outcome(status)
+            if transport is not None:
+                observations[username] = _observation(
+                    self, username, transport, status=status
+                )
+            elif status == 404:
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.NOT_FOUND, status=status
+                )
+            elif status == 200 and isinstance(data, list):
+                if not data:
+                    observations[username] = _observation(
+                        self, username, ProbeOutcome.NOT_FOUND, status=status
+                    )
+                else:
+                    found_row = None
+                    for row in data:
+                        if (
+                            isinstance(row, dict)
+                            and str(row.get("username", "")).casefold()
+                            == username.casefold()
+                        ):
+                            found_row = row
+                            break
+                    if found_row is not None:
+                        canonical = str(found_row.get("username"))
+                        profile = dict(found_row)
+                        profile.setdefault("username", canonical)
+                        observations[username] = _observation(
+                            self,
+                            username,
+                            ProbeOutcome.FOUND,
+                            canonical=canonical,
+                            profile=profile,
+                            status=status,
+                        )
+                    else:
+                        observations[username] = _observation(
+                            self, username, ProbeOutcome.NOT_FOUND, status=status
+                        )
+            else:
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.CONTRACT_BROKEN, status=status
+                )
+        return ProviderBatchResult(observations, request_count)
+
+
+class HackerNewsProvider:
+    platform_name = "Hacker News"
+    evidence_class = "official_exact"
+    entity_scope = "person"
+    contract_revision = "hacker-news-firebase-v0"
+    batch_size = 1
+
+    async def lookup_many(
+        self,
+        client: HTTPClient,
+        usernames: Sequence[str],
+        credentials: ProviderCredentials,
+    ) -> ProviderBatchResult:
+        observations: dict[str, ProviderObservation] = {}
+        request_count = 0
+        for username in usernames:
+            status, data, _ = await client.get_json(
+                f"https://hacker-news.firebaseio.com/v0/user/{quote(username, safe='')}.json"
+            )
+            request_count += 1
+            transport = _transport_outcome(status)
+            if transport is not None:
+                observations[username] = _observation(
+                    self, username, transport, status=status
+                )
+            elif status == 404 or (status == 200 and data is None):
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.NOT_FOUND, status=status
+                )
+            elif status == 200 and isinstance(data, dict):
+                raw_id = data.get("id")
+                canonical = raw_id if isinstance(raw_id, str) else None
+                if canonical and canonical.casefold() == username.casefold():
+                    profile = dict(data)
+                    profile.setdefault("username", canonical)
+                    observations[username] = _observation(
+                        self,
+                        username,
+                        ProbeOutcome.FOUND,
+                        canonical=canonical,
+                        profile=profile,
+                        status=status,
+                    )
+                else:
+                    observations[username] = _observation(
+                        self, username, ProbeOutcome.CONTRACT_BROKEN, status=status
+                    )
+            else:
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.CONTRACT_BROKEN, status=status
+                )
+        return ProviderBatchResult(observations, request_count)
+
+
+class KeybaseProvider:
+    platform_name = "Keybase"
+    evidence_class = "official_exact"
+    entity_scope = "person"
+    contract_revision = "keybase-api-1.0"
+    batch_size = 1
+
+    async def lookup_many(
+        self,
+        client: HTTPClient,
+        usernames: Sequence[str],
+        credentials: ProviderCredentials,
+    ) -> ProviderBatchResult:
+        observations: dict[str, ProviderObservation] = {}
+        request_count = 0
+        for username in usernames:
+            status, data, _ = await client.get_json(
+                f"https://keybase.io/_/api/1.0/user/lookup.json?usernames={quote(username, safe='')}"
+            )
+            request_count += 1
+            transport = _transport_outcome(status)
+            if transport is not None:
+                observations[username] = _observation(
+                    self, username, transport, status=status
+                )
+            elif status == 404:
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.NOT_FOUND, status=status
+                )
+            elif status == 200 and isinstance(data, dict):
+                them = data.get("them")
+                if isinstance(them, list) and them and isinstance(them[0], dict):
+                    user_entry = them[0]
+                    basics = user_entry.get("basics") or {}
+                    raw_uname = basics.get("username") if isinstance(basics, dict) else None
+                    canonical = raw_uname if isinstance(raw_uname, str) else None
+                    if canonical and canonical.casefold() == username.casefold():
+                        profile = dict(user_entry)
+                        profile.setdefault("username", canonical)
+                        observations[username] = _observation(
+                            self,
+                            username,
+                            ProbeOutcome.FOUND,
+                            canonical=canonical,
+                            profile=profile,
+                            status=status,
+                        )
+                    else:
+                        observations[username] = _observation(
+                            self, username, ProbeOutcome.NOT_FOUND, status=status
+                        )
+                else:
+                    observations[username] = _observation(
+                        self, username, ProbeOutcome.NOT_FOUND, status=status
+                    )
+            else:
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.CONTRACT_BROKEN, status=status
+                )
+        return ProviderBatchResult(observations, request_count)
+
+
+class BlueskyProvider:
+    platform_name = "Bluesky"
+    evidence_class = "official_exact"
+    entity_scope = "person"
+    contract_revision = "bluesky-atproto-v1"
+    batch_size = 1
+
+    async def lookup_many(
+        self,
+        client: HTTPClient,
+        usernames: Sequence[str],
+        credentials: ProviderCredentials,
+    ) -> ProviderBatchResult:
+        observations: dict[str, ProviderObservation] = {}
+        request_count = 0
+        for username in usernames:
+            actor = username if "." in username else f"{username}.bsky.social"
+            status, data, _ = await client.get_json(
+                f"https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={quote(actor, safe='')}"
+            )
+            request_count += 1
+            transport = _transport_outcome(status)
+            if transport is not None:
+                observations[username] = _observation(
+                    self, username, transport, status=status
+                )
+            elif status in (400, 404):
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.NOT_FOUND, status=status
+                )
+            elif status == 200 and isinstance(data, dict):
+                raw_handle = data.get("handle")
+                canonical = raw_handle if isinstance(raw_handle, str) else None
+                expected_handles = {username.casefold(), f"{username.casefold()}.bsky.social"}
+                if canonical and canonical.casefold() in expected_handles:
+                    profile = dict(data)
+                    profile.setdefault("username", canonical)
+                    observations[username] = _observation(
+                        self,
+                        username,
+                        ProbeOutcome.FOUND,
+                        canonical=canonical,
+                        profile=profile,
+                        status=status,
+                    )
+                else:
+                    observations[username] = _observation(
+                        self, username, ProbeOutcome.NOT_FOUND, status=status
+                    )
+            else:
+                observations[username] = _observation(
+                    self, username, ProbeOutcome.CONTRACT_BROKEN, status=status
+                )
+        return ProviderBatchResult(observations, request_count)
+
+
 _PROVIDER_INSTANCES: tuple[ProfileProvider, ...] = (
     GitHubProvider(),
     ForemProvider(),
@@ -552,7 +793,12 @@ _PROVIDER_INSTANCES: tuple[ProfileProvider, ...] = (
     YouTubeProvider(),
     TwitchProvider(),
     SteamProvider(),
+    GitLabProvider(),
+    HackerNewsProvider(),
+    KeybaseProvider(),
+    BlueskyProvider(),
 )
+
 
 PROVIDERS: dict[str, ProfileProvider] = {
     provider.platform_name: provider

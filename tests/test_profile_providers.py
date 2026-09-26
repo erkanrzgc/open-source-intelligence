@@ -284,3 +284,82 @@ async def test_configured_batch_providers_cover_all_twenty_four_aliases_once(
     assert diagnostics["http_request_count"] == 2
     assert diagnostics["provider_http_request_count"] == 2
     assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_gitlab_provider_handles_array_and_exact_match():
+    def responder(url: str) -> tuple[int, Any]:
+        if "alicedev" in url:
+            return 200, [{"username": "AliceDev", "name": "Alice"}]
+        if "bob" in url:
+            return 200, []
+        return 404, None
+
+    client = _StubClient(responder)
+    res = await lookup_many(
+        client, "GitLab", ["alicedev", "bob", "nobody"], ProviderCredentials()  # type: ignore[arg-type]
+    )
+    assert res is not None
+    assert res.observations["alicedev"].outcome == ProbeOutcome.FOUND
+    assert res.observations["alicedev"].canonical_username == "AliceDev"
+    assert res.observations["bob"].outcome == ProbeOutcome.NOT_FOUND
+    assert res.observations["nobody"].outcome == ProbeOutcome.NOT_FOUND
+    assert res.http_request_count == 3
+
+
+@pytest.mark.asyncio
+async def test_hacker_news_provider_handles_firebase_exact_and_null():
+    def responder(url: str) -> tuple[int, Any]:
+        if "alice" in url:
+            return 200, {"id": "alice", "created": 1234567, "karma": 100}
+        if "nobody" in url:
+            return 200, None  # Hacker News returns 200 null for non-existent users
+        return 404, None
+
+    client = _StubClient(responder)
+    res = await lookup_many(
+        client, "Hacker News", ["alice", "nobody", "missing"], ProviderCredentials()  # type: ignore[arg-type]
+    )
+    assert res is not None
+    assert res.observations["alice"].outcome == ProbeOutcome.FOUND
+    assert res.observations["alice"].canonical_username == "alice"
+    assert res.observations["nobody"].outcome == ProbeOutcome.NOT_FOUND
+    assert res.observations["missing"].outcome == ProbeOutcome.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_keybase_provider_handles_lookup():
+    def responder(url: str) -> tuple[int, Any]:
+        if "alice" in url:
+            return 200, {"them": [{"basics": {"username": "alice"}}]}
+        if "bob" in url:
+            return 200, {"them": []}
+        return 404, None
+
+    client = _StubClient(responder)
+    res = await lookup_many(
+        client, "Keybase", ["alice", "bob", "charlie"], ProviderCredentials()  # type: ignore[arg-type]
+    )
+    assert res is not None
+    assert res.observations["alice"].outcome == ProbeOutcome.FOUND
+    assert res.observations["alice"].canonical_username == "alice"
+    assert res.observations["bob"].outcome == ProbeOutcome.NOT_FOUND
+    assert res.observations["charlie"].outcome == ProbeOutcome.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_bluesky_provider_handles_actor_profile():
+    def responder(url: str) -> tuple[int, Any]:
+        if "alice" in url:
+            return 200, {"handle": "alice.bsky.social", "did": "did:plc:123"}
+        return 400, {"error": "AccountNotFound"}
+
+    client = _StubClient(responder)
+    res = await lookup_many(
+        client, "Bluesky", ["alice", "bob"], ProviderCredentials()  # type: ignore[arg-type]
+    )
+    assert res is not None
+    assert res.observations["alice"].outcome == ProbeOutcome.FOUND
+    assert res.observations["alice"].canonical_username == "alice.bsky.social"
+    assert res.observations["bob"].outcome == ProbeOutcome.NOT_FOUND
+

@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 
 class ProbeOutcome(str, Enum):
@@ -92,6 +95,39 @@ class PlatformResult:
             "confirmation_capable": self.confirmation_capable,
             "contract_verified": self.contract_verified,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PlatformResult:
+        raw_outcome = data.get("probe_outcome", "pending")
+        try:
+            outcome = ProbeOutcome(raw_outcome)
+        except ValueError:
+            outcome = ProbeOutcome.PENDING
+        return cls(
+            platform=str(data.get("platform", "")),
+            url=str(data.get("url", "")),
+            category=str(data.get("category", "other")),
+            exists=bool(data.get("exists", False)),
+            status=str(data.get("status", "pending")),
+            response_time=float(data.get("response_time", 0.0)),
+            profile_data=dict(data.get("profile_data") or {}),
+            http_status=int(data.get("http_status", 0)),
+            confidence=float(data.get("confidence", 0.0)),
+            fp_signals=list(data.get("fp_signals") or []),
+            rendered=bool(data.get("rendered", False)),
+            screenshot_path=data.get("screenshot_path"),
+            final_url=data.get("final_url"),
+            is_active_profile=data.get("is_active_profile"),
+            verification=dict(data.get("verification") or {}),
+            queried_username=str(data.get("queried_username", "")),
+            canonical_username=data.get("canonical_username"),
+            probe_outcome=outcome,
+            evidence_class=str(data.get("evidence_class", "heuristic")),
+            entity_scope=str(data.get("entity_scope", "person")),
+            contract_revision=str(data.get("contract_revision", "")),
+            confirmation_capable=bool(data.get("confirmation_capable", False)),
+            contract_verified=bool(data.get("contract_verified", False)),
+        )
 
 
 @dataclass
@@ -411,3 +447,97 @@ class ScanResult:
             "diagnostics": self.diagnostics,
         }
         return redact_secrets(payload)  # type: ignore[return-value]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ScanResult:
+        platforms = [
+            PlatformResult.from_dict(p) if isinstance(p, dict) else p
+            for p in data.get("platforms", [])
+        ]
+        emails = [
+            EmailResult(
+                email=str(e.get("email", "")),
+                source=str(e.get("source", "")),
+                verified=bool(e.get("verified", False)),
+                gravatar=bool(e.get("gravatar", False)),
+                breach_count=int(e.get("breach_count", 0)),
+                breaches=list(e.get("breaches") or []),
+            )
+            if isinstance(e, dict)
+            else e
+            for e in data.get("emails", [])
+        ]
+        xref_data = data.get("cross_reference") or {}
+        cross_reference = CrossReferenceResult(
+            confidence=float(xref_data.get("confidence", 0.0)),
+            matched_names=list(xref_data.get("matched_names") or []),
+            matched_locations=list(xref_data.get("matched_locations") or []),
+            matched_bios=list(xref_data.get("matched_bios") or []),
+            matched_photos=list(xref_data.get("matched_photos") or []),
+            notes=list(xref_data.get("notes") or []),
+        )
+        photo_matches = [
+            PhotoMatch(
+                platform_a=str(m.get("platform_a", "")),
+                platform_b=str(m.get("platform_b", "")),
+                similarity=float(m.get("similarity", 0.0)),
+                method=str(m.get("method", "phash")),
+            )
+            if isinstance(m, dict)
+            else m
+            for m in data.get("photo_matches", [])
+        ]
+        identity_candidates = [
+            IdentityCandidate(
+                username=str(c.get("username", "")),
+                handle_similarity=float(c.get("handle_similarity", 0.0)),
+                discovery_reasons=list(c.get("discovery_reasons") or []),
+                verdict=str(c.get("verdict", "uncertain")),
+                score=float(c.get("score", 0.0)),
+                evidence=list(c.get("evidence") or []),
+                profiles=list(c.get("profiles") or []),
+                warnings=list(c.get("warnings") or []),
+            )
+            if isinstance(c, dict)
+            else c
+            for c in data.get("identity_candidates", [])
+        ]
+        return cls(
+            username=str(data.get("username", "")),
+            platforms=platforms,
+            emails=emails,
+            web_presence=list(data.get("web_presence") or []),
+            cross_reference=cross_reference,
+            variations_checked=list(data.get("variations_checked") or []),
+            discovered_usernames=list(data.get("discovered_usernames") or []),
+            identity_candidates=identity_candidates,
+            whois_records=list(data.get("whois_records") or []),
+            dns_records=dict(data.get("dns_records") or {}),
+            subdomains=list(data.get("subdomains") or []),
+            photo_matches=photo_matches,
+            comb_leaks=list(data.get("comb_leaks") or []),
+            holehe_hits=list(data.get("holehe_hits") or []),
+            ghunt_results=list(data.get("ghunt_results") or []),
+            toutatis_results=list(data.get("toutatis_results") or []),
+            passive_hits=list(data.get("passive_hits") or []),
+            email_candidates=list(data.get("email_candidates") or []),
+            github_committers=list(data.get("github_committers") or []),
+            recon_subdomains=list(data.get("recon_subdomains") or []),
+            leaked_secrets=list(data.get("leaked_secrets") or []),
+            exif_reports=list(data.get("exif_reports") or []),
+            company_records=list(data.get("company_records") or []),
+            document_metadata=list(data.get("document_metadata") or []),
+            reverse_image_hits=list(data.get("reverse_image_hits") or []),
+            historical_usernames=list(data.get("historical_usernames") or []),
+            phone_intel=list(data.get("phone_intel") or []),
+            crypto_intel=list(data.get("crypto_intel") or []),
+            geo_points=list(data.get("geo_points") or []),
+            enrichment=data.get("enrichment"),
+            scan_time=float(data.get("scan_time", 0.0)),
+            ai_report=data.get("ai_report"),
+            investigator_summary=data.get("investigator_summary"),
+            diagnostics=dict(
+                data.get("diagnostics")
+                or {"phases": {}, "warnings": [], "missing_capabilities": []}
+            ),
+        )

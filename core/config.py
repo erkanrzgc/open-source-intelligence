@@ -109,6 +109,7 @@ class ScanConfig:
     ai_skills: bool = False  # opt-in: use LLM-backed skills during scan
     ai_skill_budget: int = 20  # max LLM calls per scan when ai_skills is on
     ai_report: bool = False  # opt-in executive summary skill
+    ai_correlate: bool = False  # opt-in cross-platform identity synthesis skill
     allow_private_networks: bool = False  # explicit opt-in for local-network research
 
     def __post_init__(self) -> None:

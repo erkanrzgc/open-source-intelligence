@@ -67,8 +67,10 @@ _REASON_CONFIDENCE: dict[str, float] = {
     "linked_profile": 1.0,
     "repeat_last_character": 0.98,
     "remove_repeated_last_character": 0.97,
+    "discovered_name": 0.95,
     "delete_one_character": 0.90,
     "transpose_adjacent_characters": 0.88,
+    "vowel_expansion": 0.85,
     "separator_mutation": 0.82,
     "numeric_suffix_mutation": 0.75,
     "single_leet_substitution": 0.70,
@@ -79,10 +81,44 @@ _REASON_ORDER = {reason: index for index, reason in enumerate(_REASON_CONFIDENCE
 _SAFE_HANDLE = re.compile(r"^[a-z0-9_.-]+$")
 
 
+def expand_consonant_clusters(handle: str) -> set[str]:
+    """Expand consonant-heavy clusters with plausible vowel insertions.
+
+    Handles texting shorthand and vowel-dropping:
+    e.g. 'rzgc' -> 'rizgic', 'rezgic', 'erkanrzgc' -> 'erkanrizgic', etc.
+    """
+    results: set[str] = set()
+    matches = list(re.finditer(r"[^aeiouy0-9._\-]{3,}", handle))
+    for m in matches:
+        cluster = m.group(0)
+        start, end = m.span()
+        prefix = handle[:start]
+        suffix = handle[end:]
+        for v in ("i", "e", "a"):
+            if len(cluster) == 4:
+                c1, c2, c3, c4 = cluster
+                results.add(f"{prefix}{c1}{v}{c2}{c3}{v}{c4}{suffix}")
+                results.add(f"{prefix}{c1}{v}{c2}{c3}{c4}{suffix}")
+                results.add(f"{prefix}{c1}{c2}{c3}{v}{c4}{suffix}")
+            elif len(cluster) == 3:
+                c1, c2, c3 = cluster
+                results.add(f"{prefix}{c1}{v}{c2}{v}{c3}{suffix}")
+                results.add(f"{prefix}{c1}{v}{c2}{c3}{suffix}")
+                results.add(f"{prefix}{c1}{c2}{v}{c3}{suffix}")
+            elif len(cluster) == 5:
+                c0 = cluster[0]
+                c1, c2, c3, c4 = cluster[1:]
+                results.add(f"{prefix}{c0}{c1}{v}{c2}{c3}{v}{c4}{suffix}")
+                results.add(f"{prefix}{c0}{c1}{v}{c2}{c3}{c4}{suffix}")
+                results.add(f"{prefix}{c0}{c1}{c2}{c3}{v}{c4}{suffix}")
+    return results
+
+
 def generate_candidates(
     username: str,
     *,
     linked_usernames: Iterable[str] = (),
+    names: Iterable[str] = (),
     max_candidates: int = 12,
 ) -> list[UsernameCandidate]:
     """Generate and rank bounded alias hypotheses.
@@ -112,10 +148,29 @@ def generate_candidates(
         if isinstance(linked, str):
             add(linked, "linked_profile")
 
+    for name in names:
+        if isinstance(name, str) and name.strip():
+            try:
+                from modules.recon.handle_generator import generate as generate_name_handles
+                for cand in generate_name_handles(name.strip(), max_candidates=10):
+                    add(cand.handle, "discovered_name")
+            except Exception:
+                pass
+
+    for expanded in expand_consonant_clusters(root):
+        add(expanded, "vowel_expansion")
+
     if root:
         add(root + root[-1], "repeat_last_character")
+        add(root + root[-1] * 2, "repeat_last_character")
     if len(root) > 1 and root[-1] == root[-2]:
         add(root[:-1], "remove_repeated_last_character")
+    if len(root) > 2 and root[-1] == root[-2] == root[-3]:
+        add(root[:-2], "remove_repeated_last_character")
+
+    add(root + "_", "separator_mutation")
+    add(root + "__", "separator_mutation")
+    add("_" + root, "separator_mutation")
 
     for index in range(len(root)):
         add(root[:index] + root[index + 1 :], "delete_one_character")

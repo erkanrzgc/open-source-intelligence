@@ -176,3 +176,91 @@ def test_history_migration_adopts_preexisting_column_without_ledger(db: Path):
     with sqlite3.connect(db) as conn:
         migrations = conn.execute("SELECT version FROM _migrations").fetchall()
     assert migrations == [(1,)]
+
+
+
+def test_prune_history(db: Path):
+    from core.history import prune_history
+
+    save_scan(_payload("old_user", ["GitHub"]), ts=1000, db_path=db)
+    save_scan(_payload("new_user", ["GitHub"]), ts=2_000_000_000, db_path=db)
+
+    deleted = prune_history(86400, db_path=db)
+    assert deleted == 1
+    assert list_scans("old_user", db_path=db) == []
+    assert len(list_scans("new_user", db_path=db)) == 1
+
+
+def test_prune_provider_data(db: Path):
+    from core.history import get_scan, prune_provider_data
+
+    payload = {
+        "username": "target",
+        "found_count": 1,
+        "platforms": [
+            {
+                "platform": "Reddit",
+                "exists": True,
+                "profile_data": {"karma": 500, "bio": "private notes"},
+            },
+            {
+                "platform": "GitHub",
+                "exists": True,
+                "profile_data": {"public_repos": 10},
+            },
+        ],
+    }
+    scan_id = save_scan(payload, ts=1000, db_path=db)
+
+    updated = prune_provider_data("Reddit", max_age_seconds=3600, db_path=db)
+    assert updated == 1
+
+    entry = get_scan(scan_id, db_path=db)
+    assert entry is not None
+    reddit = next(p for p in entry.payload["platforms"] if p["platform"] == "Reddit")
+    github = next(p for p in entry.payload["platforms"] if p["platform"] == "GitHub")
+    assert reddit["profile_data"] == {"retention_redacted": True}
+    assert github["profile_data"] == {"public_repos": 10}
+
+
+def test_search_scans_semantic(db: Path):
+    from core.history import search_scans_semantic
+
+    p1 = {
+        "username": "cyber_erkan",
+        "found_count": 2,
+        "platforms": [
+            {
+                "platform": "GitHub",
+                "exists": True,
+                "profile_data": {
+                    "name": "Erkan R",
+                    "bio": "Offensive security researcher and OSINT engineer in Istanbul.",
+                },
+            }
+        ],
+    }
+    p2 = {
+        "username": "baker_john",
+        "found_count": 1,
+        "platforms": [
+            {
+                "platform": "Instagram",
+                "exists": True,
+                "profile_data": {
+                    "name": "John Baker",
+                    "bio": "Baking fresh French pastries and artisan bread every morning.",
+                },
+            }
+        ],
+    }
+
+    save_scan(p1, ts=1000, db_path=db)
+    save_scan(p2, ts=2000, db_path=db)
+
+    results = search_scans_semantic("security researcher osint istanbul", db_path=db)
+    assert len(results) >= 1
+    assert results[0]["username"] == "cyber_erkan"
+    assert results[0]["similarity_score"] > 0.20
+
+

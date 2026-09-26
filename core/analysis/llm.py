@@ -216,6 +216,19 @@ class LLMAnalyzer:
                 api_key=DEFAULT_HTTP_API_KEY,
                 timeout=DEFAULT_HTTP_TIMEOUT,
             )
+        elif backend_kind in ("ollama", "lmstudio"):
+            default_url = (
+                "http://localhost:11434/v1/chat/completions"
+                if backend_kind == "ollama"
+                else "http://localhost:1234/v1/chat/completions"
+            )
+            backend = HttpBackend(
+                os.environ.get("OSINT_LLM_URL", default_url),
+                model=os.environ.get("OSINT_LLM_MODEL", "llama3"),
+                api_key=os.environ.get("OSINT_LLM_API_KEY", "local"),
+                timeout=DEFAULT_HTTP_TIMEOUT,
+                allow_private_networks=True,
+            )
         elif backend_kind in ("llama", "llama_cpp", "llamacpp", "local"):
             model_path = DEFAULT_CACHE_DIR / DEFAULT_MODEL_FILE
             backend = LlamaCppBackend(
@@ -226,7 +239,7 @@ class LLMAnalyzer:
         else:
             raise LLMUnavailable(
                 f"Unknown OSINT_LLM_BACKEND={backend_kind!r} "
-                "(expected one of: http, llama_cpp)"
+                "(expected one of: http, ollama, lmstudio, llama_cpp)"
             )
         return cls(backend)
 

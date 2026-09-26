@@ -126,6 +126,20 @@ def cross_reference(found_platforms: list[PlatformResult]) -> CrossReferenceResu
                         break
             if linked_found:
                 break
+        if linked_found:
+            break
+
+    matched_bios = []
+    if len(bios) >= 2:
+        from core.semantic_matcher import match_bios
+        bio_matches = match_bios(bios, threshold=0.25)
+        for p1, p2, sim in bio_matches[:3]:
+            matched_bios.append(f"'{p1}' ~ '{p2}' ({sim:.0%} semantic similarity)")
+        if bio_matches:
+            best_sim = bio_matches[0][2]
+            score += 25.0 * best_sim
+            total_weight += 25.0
+            notes.append(f"Semantic bio match ({best_sim:.0%}) between {bio_matches[0][0]} and {bio_matches[0][1]}")
 
     confidence = (score / total_weight * 100) if total_weight > 0 else 0.0
     confidence = min(confidence, 100.0)
@@ -134,5 +148,6 @@ def cross_reference(found_platforms: list[PlatformResult]) -> CrossReferenceResu
         confidence=round(confidence, 1),
         matched_names=matched_names,
         matched_locations=matched_locations,
+        matched_bios=matched_bios,
         notes=notes,
     )

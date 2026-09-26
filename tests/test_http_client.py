@@ -142,3 +142,40 @@ def test_tls_verification_can_be_disabled_by_env(monkeypatch):
     monkeypatch.setenv("OSINT_INSECURE_TLS", "1")
     client = HTTPClient()
     assert client._verify_tls is False
+
+
+def test_json_result_tuple_unpacking_and_metadata():
+    from core.http_client import JSONResult
+
+    res = JSONResult(
+        200,
+        {"login": "alice"},
+        0.123,
+        headers={"x-ratelimit-remaining": "4999", "x-ratelimit-limit": "5000", "sunset": "Wed, 11 Nov 2026 00:00:00 GMT"},
+        final_url="https://api.github.com/users/alice",
+    )
+    status, data, elapsed = res
+    assert status == 200
+    assert data == {"login": "alice"}
+    assert elapsed == 0.123
+    assert res.headers["x-ratelimit-remaining"] == "4999"
+    assert res.final_url == "https://api.github.com/users/alice"
+    assert res.rate_limits["remaining"] == 4999
+    assert res.rate_limits["limit"] == 5000
+    assert "sunset" in res.rate_limits
+
+
+def test_parse_rate_limit_headers():
+    from core.http_client import parse_rate_limit_headers
+
+    parsed = parse_rate_limit_headers({
+        "Retry-After": "120",
+        "RateLimit-Remaining": "5",
+        "RateLimit-Reset": "1699999999",
+        "Deprecation": "@1700000000",
+    })
+    assert parsed["retry_after"] == 120.0
+    assert parsed["remaining"] == 5
+    assert parsed["reset"] == 1699999999.0
+    assert parsed["deprecation"] == "@1700000000"
+

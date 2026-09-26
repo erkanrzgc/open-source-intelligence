@@ -59,7 +59,20 @@ PROVIDER_SMOKE_FIXTURES: dict[str, ProviderSmokeFixture] = {
     ),
     "Twitch": ProviderSmokeFixture("Twitch", "twitch", "osismoke{nonce}"),
     "Steam": ProviderSmokeFixture("Steam", "gaben", "osi_smoke_{nonce}"),
+    "GitLab": ProviderSmokeFixture(
+        "GitLab", "gitlab", "osi_smoke_{nonce}", public=True
+    ),
+    "Hacker News": ProviderSmokeFixture(
+        "Hacker News", "dang", "osi_smoke_{nonce}", public=True
+    ),
+    "Keybase": ProviderSmokeFixture(
+        "Keybase", "max", "osi_smoke_{nonce}", public=True
+    ),
+    "Bluesky": ProviderSmokeFixture(
+        "Bluesky", "bsky.app", "osismk{nonce}", public=True
+    ),
 }
+
 
 
 def _safe_observation(observation: ProviderObservation) -> dict[str, Any]:

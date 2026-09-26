@@ -179,3 +179,39 @@ async def test_contract_mismatch_records_failure_without_raw_payload():
     assert "someone-else" in serialized  # Canonical mismatch is contract evidence.
     assert "provider_private_field" not in serialized
     assert "raw-secret" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_extended_public_providers_smoke_matrix():
+    def responder(url: str) -> tuple[int, Any]:
+        if "gitlab.com/api/v4/users?username=gitlab" in url:
+            return 200, [{"username": "gitlab"}]
+        if "hacker-news.firebaseio.com/v0/user/dang.json" in url:
+            return 200, {"id": "dang", "created": 1000}
+        if "keybase.io/_/api/1.0/user/lookup.json?usernames=max" in url:
+            return 200, {"them": [{"basics": {"username": "max"}}]}
+        if "app.bsky.actor.getProfile?actor=bsky.app" in url:
+            return 200, {"handle": "bsky.app"}
+        # Negative responses:
+        if "hacker-news.firebaseio.com" in url:
+            return 200, None
+        if "gitlab.com" in url:
+            return 200, []
+        if "keybase.io" in url:
+            return 200, {"them": []}
+        if "app.bsky.actor.getProfile" in url:
+            return 400, {"error": "AccountNotFound"}
+        return 404, None
+
+    client = _StubClient(responder)
+    report = await run_provider_contract_smoke(
+        client,  # type: ignore[arg-type]
+        ProviderCredentials(),
+        provider_names=["GitLab", "Hacker News", "Keybase", "Bluesky"],
+        nonce="smoke123",
+    )
+    assert report["success"] is True
+    assert report["summary"]["selected"] == 4
+    assert report["summary"]["passed"] == 4
+    assert report["summary"]["failed"] == 0
+

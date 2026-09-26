@@ -8,8 +8,7 @@ dynamic = ["version"]
 description = "Open-source OSINT investigation platform"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+license = { text = "MIT" }
 authors = [{ name = "erkanrzgc", email = "erkan.rizaguc@gmail.com" }]
 keywords = ["osint", "username", "intelligence", "recon"]
 classifiers = [

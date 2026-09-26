@@ -17,6 +17,9 @@ platforms:
   url: https://www.instagram.com/{username}/
 - absence_strings:
   - '"statusCode":10221'
+  - SlardarWAF
+  - slardarClient
+  - tiktok-verify-page
   category: social
   check_method: message
   check_type: content_absent
@@ -119,10 +122,15 @@ platforms:
   category: social
   check_method: message
   name: Bluesky
+  evidence_class: official_exact
+  entity_scope: person
+  lookup_semantics: exact
+  docs_url: https://docs.bsky.app/docs/api/app-bsky-actor-get-profile
   presence_strings:
   - '"did"'
   url: https://bsky.app/profile/{username}.bsky.social
   url_probe: https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={username}.bsky.social
+
 - category: social
   check_method: response_url
   name: Quora
@@ -164,9 +172,14 @@ platforms:
 - category: dev
   check_method: status
   name: Bitbucket
+  evidence_class: official_scoped
+  entity_scope: workspace
+  lookup_semantics: exact
+  docs_url: https://developer.atlassian.com/cloud/bitbucket/rest/api-group-workspaces/#api-workspaces-workspace-get
   url: https://bitbucket.org/{username}/
   url_probe: https://api.bitbucket.org/2.0/workspaces/{username}
   username_pattern: ^[a-zA-Z0-9-_]{1,30}$
+
 - category: dev
   has_deep_scraper: true
   name: Dev.to
@@ -188,8 +201,11 @@ platforms:
   name: Replit
   url: https://replit.com/@{username}
   username_pattern: ^[^\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]+$
-- category: dev
-  check_method: status
+- absence_strings:
+  - Something went wrong!
+  - Some error occured while loading page for you
+  category: dev
+  check_method: message
   name: HackerRank
   url: https://www.hackerrank.com/profile/{username}
   url_probe: https://www.hackerrank.com/rest/contests/master/hackers/{username}/profile
@@ -230,8 +246,10 @@ platforms:
   - '"objects":[{'
   url: https://www.npmjs.com/~{username}
   url_probe: https://registry.npmjs.org/-/v1/search?text=maintainer:{username}&size=1
-- category: dev
-  check_method: status
+- absence_strings:
+  - Client Challenge
+  category: dev
+  check_method: message
   name: PyPI
   url: https://pypi.org/user/{username}/
 - category: dev
@@ -376,6 +394,10 @@ platforms:
   lookup_semantics: exact
   contract_revision: '2026-08-11'
   url: https://medium.com/@{username}
+  url_probe: https://medium.com/feed/@{username}
+  absence_strings:
+  - 'Out of nothing, something'
+  - 'PAGE NOT FOUND'
 - absence_strings:
   - '"user":null'
   category: content
@@ -407,8 +429,10 @@ platforms:
   presence_strings:
   - '"hydratable":"user"'
   url: https://soundcloud.com/{username}
-- category: content
-  check_method: status
+- absence_strings:
+  - Spotify – Web Player
+  category: content
+  check_method: message
   name: Spotify
   url: https://open.spotify.com/user/{username}
   url_probe: https://api.stats.fm/api/v1/users/{username}
@@ -453,10 +477,14 @@ platforms:
   category: professional
   check_method: message
   name: Gravatar
+  evidence_class: public_contract
+  entity_scope: person
+  lookup_semantics: exact
+  docs_url: https://docs.gravatar.com/profiles/
   presence_strings:
   - requestHash
   url: https://en.gravatar.com/{username}
-  url_probe: http://en.gravatar.com/{username}.json
+  url_probe: https://en.gravatar.com/{username}.json
 - absence_strings:
   - them":[null]
   - bad list value
@@ -464,8 +492,13 @@ platforms:
   check_method: message
   has_deep_scraper: true
   name: Keybase
+  evidence_class: official_exact
+  entity_scope: person
+  lookup_semantics: exact
+  docs_url: https://keybase.io/docs/api/1.0/call/user/lookup
   url: https://keybase.io/{username}
   url_probe: https://keybase.io/_/api/1.0/user/lookup.json?usernames={username}
+
 - category: professional
   check_method: status
   name: Behance
@@ -500,10 +533,15 @@ platforms:
   error_text: No such user.
   has_deep_scraper: true
   name: Hacker News
+  evidence_class: official_exact
+  entity_scope: person
+  lookup_semantics: exact
+  docs_url: https://github.com/HackerNews/API
   presence_strings:
   - '"created"'
   url: https://news.ycombinator.com/user?id={username}
   url_probe: https://hacker-news.firebaseio.com/v0/user/{username}.json
+
 - absence_strings:
   - We seem to have lost this page
   category: community
@@ -561,6 +599,7 @@ platforms:
   - username-available
   - robots
   - noindex,nofollow
+  - Page no longer exists
   category: other
   check_method: message
   name: SlideShare
@@ -787,21 +826,23 @@ platforms:
   name: Meetup
   url: https://www.meetup.com/members/{username}
 - absence_strings:
+  - 'This account doesn’t exist'
+  - "This account doesn't exist"
+  - 'Account suspended'
   - ' not found'
   category: social
-  check_method: message
-  check_type: content_absent
-  error_text: ' not found'
+  check_method: status
   name: X
   evidence_class: official_exact
   entity_scope: person_or_org
   lookup_semantics: exact
-  auth_mode: required
+  auth_mode: optional
   contract_revision: x-api-v2-2026-08
   docs_url: https://docs.x.com/x-api/users/lookup/introduction
   automated: true
   presence_strings:
-  - '"legacy"'
+  - 'property="og:title"'
+  - 'property="profile:username"'
   url: https://x.com/{username}
   username_pattern: ^[a-zA-Z0-9_]{1,15}$
 - category: dev
@@ -809,12 +850,18 @@ platforms:
   name: MicrosoftLearn
   url: https://learn.microsoft.com/en-us/users/{username}
   url_probe: https://learn.microsoft.com/api/profiles/{username}
-- category: community
-  check_method: status
+- absence_strings:
+  - Security Verification
+  - verify-human
+  category: community
+  check_method: message
   name: AppleDeveloper
   url: https://developer.apple.com/forums/profile/{username}
-- category: community
-  check_method: status
+- absence_strings:
+  - Security Verification
+  - verify-human
+  category: community
+  check_method: message
   name: AppleDiscussions
   url: https://discussions.apple.com/profile/{username}
 - category: dev
@@ -1935,7 +1982,7 @@ platforms:
 - category: community
   check_method: status
   name: '{username}.ddns.net'
-  url: '{username}.ddns.net'
+  url: http://{username}.ddns.net
 - category: dev
   check_method: status
   check_type: content_absent

@@ -21,6 +21,10 @@ from modules.deep_scrapers import (
     scrape_tiktok,
     scrape_twitter,
     scrape_youtube,
+    scrape_bluesky,
+    scrape_telegram,
+    scrape_gravatar,
+    scrape_mastodon,
 )
 
 
@@ -410,3 +414,90 @@ async def test_npm_success():
             result = await scrape_npm(client, "alice")
     assert result["name"] == "Alice"
     assert result["package_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_bluesky_success():
+    payload = {
+        "displayName": "Alice Smith",
+        "handle": "alice.bsky.social",
+        "description": "Blue sky dev",
+        "avatar": "https://bsky/avatar.jpg",
+        "followersCount": 42,
+        "followsCount": 10,
+        "postsCount": 5,
+    }
+    with aioresponses() as m:
+        m.get(
+            "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=alice.bsky.social",
+            status=200,
+            payload=payload,
+        )
+        async with HTTPClient() as client:
+            result = await scrape_bluesky(client, "alice")
+    assert result["name"] == "Alice Smith"
+    assert result["username"] == "alice.bsky.social"
+    assert result["followers"] == 42
+
+
+@pytest.mark.asyncio
+async def test_telegram_success():
+    body = """
+    <html>
+    <head>
+        <meta property="og:title" content="Alice in Telegram">
+        <meta property="og:description" content="OSINT updates">
+        <meta property="og:image" content="https://t.me/i/user/alice.jpg">
+    </head>
+    <body>
+        <div class="tgme_page_extra">1 234 subscribers</div>
+    </body>
+    </html>
+    """
+    with aioresponses() as m:
+        m.get("https://t.me/alice", status=200, body=body)
+        async with HTTPClient() as client:
+            result = await scrape_telegram(client, "alice")
+    assert result["name"] == "Alice in Telegram"
+    assert result["username"] == "alice"
+    assert result["subscribers_text"] == "1 234 subscribers"
+
+
+@pytest.mark.asyncio
+async def test_gravatar_success():
+    payload = {
+        "entry": [
+            {
+                "displayName": "Alice G",
+                "preferredUsername": "alice",
+                "aboutMe": "Gravatar bio",
+                "thumbnailUrl": "https://gravatar.com/avatar/123",
+                "urls": [{"value": "https://alice.com"}],
+            }
+        ]
+    }
+    with aioresponses() as m:
+        m.get("https://en.gravatar.com/alice.json", status=200, payload=payload)
+        async with HTTPClient() as client:
+            result = await scrape_gravatar(client, "alice")
+    assert result["name"] == "Alice G"
+    assert result["bio"] == "Gravatar bio"
+    assert "https://alice.com" in result["urls"]
+
+
+@pytest.mark.asyncio
+async def test_mastodon_success():
+    payload = {
+        "display_name": "Alice Toot",
+        "username": "alice",
+        "note": "<p>Decentralized bio</p>",
+        "followers_count": 100,
+    }
+    with aioresponses() as m:
+        m.get("https://mastodon.social/api/v1/accounts/lookup?acct=alice", status=200, payload=payload)
+        async with HTTPClient() as client:
+            result = await scrape_mastodon(client, "alice")
+    assert result["name"] == "Alice Toot"
+    assert result["bio"] == "Decentralized bio"
+    assert result["followers"] == 100
+

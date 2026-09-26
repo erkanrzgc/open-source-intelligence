@@ -40,6 +40,9 @@ _DATADOME_RE = re.compile(
 _PERIMETERX_RE = re.compile(
     r"(perimeterx|px-captcha|/_px/captcha)", re.IGNORECASE
 )
+_TIKTOK_WAF_RE = re.compile(
+    r"(slardarclient|slardar_us_waf|slardarwaf|tiktok-verify-page)", re.IGNORECASE
+)
 _NOSCRIPT_REQUIRED_RE = re.compile(
     r"<noscript[^>]*>[^<]*?(you need to enable javascript|please enable javascript|"
     r"javascript is (required|disabled)|enable javascript to|requires javascript)",
@@ -98,6 +101,8 @@ def looks_like_js_wall(
         return True, "datadome_challenge"
     if _PERIMETERX_RE.search(body):
         return True, "perimeterx_challenge"
+    if _TIKTOK_WAF_RE.search(body):
+        return True, "tiktok_waf_challenge"
 
     # 3. JavaScript-required noscript banner — the wording itself is the wall
     # signal. We additionally require that the body lacks substantial

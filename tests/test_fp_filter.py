@@ -59,3 +59,23 @@ def test_short_body_loses_size_signal():
     body = _make_body(title="alice", body="alice")
     out = score_match(username="alice", body=body, check_type="status", http_status=200)
     assert "size" not in out.signals
+
+
+def test_error_title_penalized_and_blocks_title_bonus():
+    body = _make_body(title="alice - Page Not Found", body="Sorry, user alice cannot be found" + ("x" * 800))
+    out = score_match(username="alice", body=body, check_type="status", http_status=200)
+    assert "title_error_marker" in out.signals
+    assert "title" not in out.signals
+    assert out.confidence < 0.45
+
+
+def test_og_error_title_penalized():
+    body = _make_body(
+        title="Example Service",
+        head_extra='<meta property="og:title" content="Error 404 - Profile Not Found">',
+        body="x" * 800,
+    )
+    out = score_match(username="alice", body=body, check_type="status", http_status=200)
+    assert "title_error_marker" in out.signals
+    assert out.confidence < 0.45
+

@@ -12,6 +12,9 @@ ai_required: false
 
 Use this package for supported exact provider APIs whose auth, batching or
 response semantics cannot be represented safely by a generic YAML URL.
+Currently supported: GitHub, Dev.to (Forem), Reddit, X, YouTube, Twitch, Steam,
+GitLab, Hacker News, Keybase, Bluesky.
+
 
 ## Input contract
 

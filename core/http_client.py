@@ -13,6 +13,7 @@ Notes
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import itertools
 import os
@@ -48,6 +49,88 @@ def _safe_log_url(url: str) -> str:
         query="[redacted]" if parsed.query else "",
         fragment="",
     ).geturl()
+
+
+def parse_rate_limit_headers(headers: dict[str, str]) -> dict[str, Any]:
+    """Extract standard and provider rate-limit and deprecation headers."""
+    lowered = {k.lower(): v for k, v in headers.items()}
+    out: dict[str, Any] = {}
+
+    if "retry-after" in lowered:
+        val = lowered["retry-after"]
+        try:
+            out["retry_after"] = float(val)
+        except ValueError:
+            out["retry_after_raw"] = val
+
+    for limit_key in ("ratelimit-limit", "x-ratelimit-limit"):
+        if limit_key in lowered:
+            try:
+                out["limit"] = int(lowered[limit_key])
+                break
+            except ValueError:
+                pass
+
+    for rem_key in ("ratelimit-remaining", "x-ratelimit-remaining"):
+        if rem_key in lowered:
+            try:
+                out["remaining"] = int(lowered[rem_key])
+                break
+            except ValueError:
+                pass
+
+    for reset_key in ("ratelimit-reset", "x-ratelimit-reset"):
+        if reset_key in lowered:
+            try:
+                out["reset"] = float(lowered[reset_key])
+                break
+            except ValueError:
+                pass
+
+    if "deprecation" in lowered:
+        out["deprecation"] = lowered["deprecation"]
+    if "sunset" in lowered:
+        out["sunset"] = lowered["sunset"]
+
+    return out
+
+
+class JSONResult(tuple):
+    """Subclass of tuple (status, data, elapsed) with response metadata."""
+
+    status: int
+    data: Any | None
+    elapsed: float
+    headers: dict[str, str]
+    final_url: str | None
+    error_data: Any | None
+    raw_body: bytes | None
+
+    def __new__(
+        cls,
+        status: int,
+        data: Any | None,
+        elapsed: float,
+        *,
+        headers: dict[str, str] | None = None,
+        final_url: str | None = None,
+        error_data: Any | None = None,
+        raw_body: bytes | None = None,
+    ) -> JSONResult:
+        inst = super().__new__(cls, (status, data, elapsed))
+        inst.status = status
+        inst.data = data
+        inst.elapsed = elapsed
+        inst.headers = headers or {}
+        inst.final_url = final_url
+        inst.error_data = error_data
+        inst.raw_body = raw_body
+        return inst
+
+    @property
+    def rate_limits(self) -> dict[str, Any]:
+        return parse_rate_limit_headers(self.headers)
+
 
 
 class _SafeResolver(aiohttp.abc.AbstractResolver):
@@ -453,16 +536,35 @@ class HTTPClient:
                         )
                         await self._post_request(url, resp.status, resp)
                         self._record_proxy_result(proxy, success=True)
+                        headers_dict = dict(resp.headers)
+                        final_url = str(resp.url)
                         if resp.status == 200:
                             data = await resp.json(content_type=None)
-                            return resp.status, data, elapsed
-                        return resp.status, None, elapsed
+                            return JSONResult(
+                                resp.status,
+                                data,
+                                elapsed,
+                                headers=headers_dict,
+                                final_url=final_url,
+                            )
+                        err_data = None
+                        with contextlib.suppress(Exception):
+                            err_data = await resp.json(content_type=None)
+                        return JSONResult(
+
+                            resp.status,
+                            None,
+                            elapsed,
+                            headers=headers_dict,
+                            final_url=final_url,
+                            error_data=err_data,
+                        )
                 except asyncio.TimeoutError:
                     elapsed = time.monotonic() - start
                     log.debug("json timeout on %s", _safe_log_url(url))
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
-                        return 0, None, elapsed
+                        return JSONResult(0, None, elapsed)
                 except (aiohttp.ClientError, OSError, ValueError) as exc:
                     elapsed = time.monotonic() - start
                     log.debug(
@@ -472,19 +574,19 @@ class HTTPClient:
                     )
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
-                        return -1, None, elapsed
+                        return JSONResult(-1, None, elapsed)
             finally:
                 host_lock.release()
                 global_lock.release()
             await asyncio.sleep(_backoff(attempt))
-        return -1, None, 0.0
+        return JSONResult(-1, None, 0.0)
 
     async def post_json(
         self,
         url: str,
         json_body: dict,
         headers: dict | None = None,
-    ) -> tuple[int, dict | None, float]:
+    ) -> tuple[int, Any | None, float]:
         """POST a JSON body and parse the JSON response.
 
         Mirrors :meth:`get_json` — same fingerprinting, retry, proxy,
@@ -516,16 +618,35 @@ class HTTPClient:
                         )
                         await self._post_request(url, resp.status, resp)
                         self._record_proxy_result(proxy, success=True)
+                        headers_dict = dict(resp.headers)
+                        final_url = str(resp.url)
                         if resp.status == 200:
                             data = await resp.json(content_type=None)
-                            return resp.status, data, elapsed
-                        return resp.status, None, elapsed
+                            return JSONResult(
+                                resp.status,
+                                data,
+                                elapsed,
+                                headers=headers_dict,
+                                final_url=final_url,
+                            )
+                        err_data = None
+                        with contextlib.suppress(Exception):
+                            err_data = await resp.json(content_type=None)
+                        return JSONResult(
+
+                            resp.status,
+                            None,
+                            elapsed,
+                            headers=headers_dict,
+                            final_url=final_url,
+                            error_data=err_data,
+                        )
                 except asyncio.TimeoutError:
                     elapsed = time.monotonic() - start
                     log.debug("post_json timeout on %s", _safe_log_url(url))
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
-                        return 0, None, elapsed
+                        return JSONResult(0, None, elapsed)
                 except (aiohttp.ClientError, OSError, ValueError) as exc:
                     elapsed = time.monotonic() - start
                     log.debug(
@@ -535,12 +656,13 @@ class HTTPClient:
                     )
                     self._record_proxy_result(proxy, success=False)
                     if attempt == RETRY_COUNT:
-                        return -1, None, elapsed
+                        return JSONResult(-1, None, elapsed)
             finally:
                 host_lock.release()
                 global_lock.release()
             await asyncio.sleep(_backoff(attempt))
-        return -1, None, 0.0
+        return JSONResult(-1, None, 0.0)
+
 
     async def post_form(
         self,

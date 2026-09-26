@@ -46,7 +46,7 @@ from modules.comb_leaks import search_comb_many
 from modules.deep_scrapers import DEEP_SCRAPERS
 from modules.dns_lookup import enumerate_subdomains, get_dns_records
 from modules.email_discovery import discover_emails
-from modules.fp_filter import score_match
+from modules.fp_filter import looks_like_error_title, score_match
 from modules.ghunt_lookup import is_available as ghunt_available
 from modules.ghunt_lookup import lookup_emails as ghunt_lookup_emails
 from modules.holehe_check import check_emails as holehe_check_emails
@@ -357,7 +357,13 @@ async def _check_platform(
                             probe_url, platform.headers
                         )
                 except Exception:
-                    _probe_status, _probe_data, _probe_elapsed = -1, None, 0.0
+                    try:
+                        _probe_status, _body, _probe_elapsed = await client.get(
+                            probe_url, platform.headers
+                        )
+                        _probe_data = _body
+                    except Exception:
+                        _probe_status, _probe_data, _probe_elapsed = -1, None, 0.0
                 if _probe_status != 200:
                     result.http_status = _probe_status
                     result.response_time = _probe_elapsed
@@ -378,12 +384,19 @@ async def _check_platform(
                     result.canonical_username
                     and result.canonical_username.casefold() == username.casefold()
                 )
-                if _probe_data is not None and platform.absence_strings:
+                if _probe_data is not None:
                     import json as _json
                     _probe_text = _json.dumps(
                         _probe_data, separators=(",", ":"), ensure_ascii=False
                     ) if isinstance(_probe_data, dict | list) else str(_probe_data)
-                    if _any_absence_match(_probe_text, platform.absence_strings):
+                    if platform.absence_strings and _any_absence_match(_probe_text, platform.absence_strings):
+                        result.http_status = _probe_status
+                        result.response_time = _probe_elapsed
+                        result.exists = False
+                        result.status = "not_found"
+                        result.fp_signals = ["url_probe_absence"]
+                        return result
+                    if platform.presence_strings and not _any_presence_match(_probe_text, platform.presence_strings):
                         result.http_status = _probe_status
                         result.response_time = _probe_elapsed
                         result.exists = False
@@ -463,14 +476,18 @@ async def _check_platform(
             result.final_url = final_url if final_url and final_url != url else None
             if platform.check_type == "status":
                 result.exists = status == 200
-                # Honour maigret's absence_strings even for status-type platforms.
+                # Honour maigret's absence_strings and presence_strings even for status-type platforms.
                 # Many sites return 200 with an empty profile page rather than a
                 # proper 404, so a message-based absent check is more reliable.
-                if result.exists and body and platform.absence_strings:
-                    if _any_absence_match(body, platform.absence_strings):
+                if result.exists and body:
+                    if platform.absence_strings and _any_absence_match(body, platform.absence_strings):
                         result.exists = False
                         result.status = "soft_404_message"
                         result.fp_signals = list(result.fp_signals) + ["maigret_absence_match"]
+                    elif platform.presence_strings and not _any_presence_match(body, platform.presence_strings):
+                        result.exists = False
+                        result.status = "soft_404_missing_presence"
+                        result.fp_signals = list(result.fp_signals) + ["presence_strings_missing"]
             elif platform.check_type == "content_absent":
                 absent = (platform.error_text and platform.error_text in body) or _any_absence_match(body, platform.absence_strings)
                 result.exists = status == 200 and not absent
@@ -484,6 +501,12 @@ async def _check_platform(
                 result.exists = False
                 result.status = "soft_404_redirected"
                 result.fp_signals = list(result.fp_signals) + ["redirect_off_target"]
+
+            # Soft-404 detection via page title explicitly declaring 404, not found, or challenge.
+            if result.exists and body and looks_like_error_title(body):
+                result.exists = False
+                result.status = "soft_404_title"
+                result.fp_signals = list(result.fp_signals) + ["title_error_marker"]
 
             # SPA / generic-page guard: if the page says the profile exists but
             # doesn't even mention the username, it's almost certainly a false
@@ -604,11 +627,19 @@ async def _check_platform(
                         result.exists = status == 200 and present
                     # Re-score after render — the rendered body has real content
                     if result.exists:
+                        if _extract_available():
+                            extracted = extract_profile(body)
+                            if extracted:
+                                result.profile_data = {**(result.profile_data or {}), **extracted}
                         # Username must be in the rendered body
                         if username.lower() not in body.lower():
                             result.exists = False
                             result.status = "username_not_in_body"
                             result.fp_signals = list(result.fp_signals) + ["username_absent", "pw_rescore"]
+                        elif looks_like_error_title(body):
+                            result.exists = False
+                            result.status = "soft_404_title"
+                            result.fp_signals = list(result.fp_signals) + ["title_error_marker", "pw_rescore"]
                         else:
                             fp = score_match(
                                 username=username,
@@ -1530,6 +1561,7 @@ async def _phase_smart_search(
     candidates = generate_candidates(
         cfg.username,
         linked_usernames=merged.get("linked_usernames", []),
+        names=merged.get("names", []),
         max_candidates=cfg.alias_max_candidates,
     )
 
@@ -2381,6 +2413,72 @@ async def _phase_ai_report(
         )
 
 
+async def _phase_identity_correlate(
+    cfg: ScanConfig,
+    result: ScanResult,
+    context: ScanContext,
+) -> None:
+    """Correlate multi-platform profiles, breaches, and signals into a unified identity graph."""
+    if not (cfg.ai_correlate or cfg.ai_skills):
+        return
+    from core.analysis.skill_loader import SkillError, run_skill
+
+    confirmed_platforms = []
+    for p in result.platforms:
+        if p.exists or (p.verification or {}).get("verdict") == "confirmed":
+            confirmed_platforms.append({
+                "platform": p.platform,
+                "url": p.url,
+                "display_name": (p.profile_data or {}).get("name")
+                or (p.profile_data or {}).get("display_name", ""),
+                "bio": (p.profile_data or {}).get("bio")
+                or (p.profile_data or {}).get("description", ""),
+                "location": (p.profile_data or {}).get("location", ""),
+                "linked_accounts": [
+                    (p.profile_data or {}).get(k, "")
+                    for k in ("twitter_username", "github_username")
+                    if (p.profile_data or {}).get(k)
+                ],
+                "avatar_hash": (p.profile_data or {}).get("avatar_hash", ""),
+            })
+
+    for id_cand in result.identity_candidates:
+        cand_dict = id_cand.to_dict() if hasattr(id_cand, "to_dict") else id_cand
+        if isinstance(cand_dict, dict):
+            for prof in cand_dict.get("confirmed_profiles", []):
+                if isinstance(prof, dict) and prof.get("url") and prof not in confirmed_platforms:
+                    confirmed_platforms.append(prof)
+
+    inputs = {
+        "username": cfg.username,
+        "platforms": confirmed_platforms[:20],
+        "emails": [e.email for e in result.emails][:10],
+        "breaches": [b.get("name", "") for b in getattr(result, "comb_leaks", []) if isinstance(b, dict)][:10],
+        "whois": [w.get("domain", "") for w in result.whois_records if isinstance(w, dict)][:5],
+        "metadata": {
+            "cross_reference_confidence": result.cross_reference.confidence,
+            "matched_names": result.cross_reference.matched_names,
+            "matched_locations": result.cross_reference.matched_locations,
+            "matched_bios": getattr(result.cross_reference, "matched_bios", []),
+            "discovered_usernames": result.discovered_usernames[:10],
+            "photo_match_count": len(result.photo_matches),
+        },
+    }
+
+    try:
+        correlation = await run_skill(
+            "identity_correlator",
+            inputs,
+            budget=context.skill_budget,
+        )
+        result.investigator_summary = correlation
+    except SkillError as exc:
+        log.debug("identity_correlator failed: %s", exc)
+        result.diagnostics.setdefault("warnings", []).append(
+            "AI identity correlation was requested but could not be generated"
+        )
+
+
 @dataclass
 class _ScanState:
     cfg: ScanConfig
@@ -2606,6 +2704,11 @@ def _phase_registry() -> tuple[PhaseSpec, ...]:
         PhaseSpec("cross_reference", lambda _s: True, lambda s: _finalize_cross_reference(s.result)),
         PhaseSpec("geocode", lambda s: s.cfg.geocode, lambda s: _phase_geocode(s.cfg, s.result)),
         PhaseSpec("enrichment", lambda s: s.cfg.enrichment, lambda s: _phase_enrichment(s.cfg, s.result)),
+        PhaseSpec(
+            "ai_correlate",
+            lambda s: bool(s.cfg.ai_correlate or (s.cfg.ai_skills and not s.cfg.ai_report)),
+            lambda s: _phase_identity_correlate(s.cfg, s.result, s.context),
+        ),
         PhaseSpec("ai_report", lambda s: s.cfg.ai_report, lambda s: _phase_ai_report(s.cfg, s.result, s.context)),
     )
 

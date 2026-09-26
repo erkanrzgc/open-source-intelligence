@@ -72,3 +72,22 @@ class TestCrossReference:
         ]
         result = cross_reference(profiles)
         assert result.confidence > 0
+
+    def test_semantic_bio_matching(self):
+        profiles = [
+            _profile(
+                "gh",
+                "https://gh/alice",
+                name="Alice",
+                bio="Cyber security researcher & open source software engineer in Istanbul.",
+            ),
+            _profile(
+                "tw",
+                "https://tw/alice",
+                name="Alice",
+                bio="Offensive security engineer and researcher working on OSINT tools.",
+            ),
+        ]
+        result = cross_reference(profiles)
+        assert len(result.matched_bios) > 0
+        assert any("semantic similarity" in m for m in result.matched_bios)

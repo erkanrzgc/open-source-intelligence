@@ -74,6 +74,7 @@ models/
 # AI tool configs (local only)
 .claude/
 .codex
+opencode.json
 
 # Generated assets (too large for git)
 osint_icon_base64.txt

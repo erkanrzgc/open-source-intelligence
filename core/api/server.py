@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from core import auth, cases, watchlist
@@ -30,6 +30,7 @@ from core.engine import run_scan
 from core.history import diff_entries, get_latest, get_scan, list_scans
 from core.http_client import HTTPClient
 from core.logging_setup import get_logger
+from core.models import ScanResult
 from core.platform_loader import catalogue_summary
 from core.progress import ProgressEmitter, set_emitter
 from core.scan_service import SCAN_PAYLOAD_SCHEMA_VERSION, complete_scan_result
@@ -64,10 +65,14 @@ async def _auth_dependency(request: Request) -> None:
         return
 
     header = request.headers.get("authorization", "")
-    if not header.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
+    token = ""
+    if header.lower().startswith("bearer "):
+        token = header.split(" ", 1)[1].strip()
+    elif "token" in request.query_params:
+        token = request.query_params["token"].strip()
 
-    token = header.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="missing bearer token")
     try:
         payload = auth.decode_token(token, secret=auth.get_secret())
     except auth.AuthError as exc:
@@ -159,6 +164,7 @@ class ScanRequest(BaseModel):
     ai_skills: bool = False
     ai_skill_budget: int = Field(default=20, ge=0)
     ai_report: bool = False
+    ai_correlate: bool = False
     allow_private_networks: bool = False
     save_history: bool = True
     case_id: int | None = None
@@ -283,6 +289,7 @@ def _cfg_from_request(req: ScanRequest, *, enforce_paths: bool = False) -> ScanC
         ai_skills=req.ai_skills,
         ai_skill_budget=req.ai_skill_budget,
         ai_report=req.ai_report,
+        ai_correlate=req.ai_correlate,
         allow_private_networks=req.allow_private_networks,
     )
 
@@ -298,6 +305,85 @@ async def _execute_api_scan(req: ScanRequest) -> dict[str, Any]:
         mark_watchlist=True,
     )
     return completed.payload
+
+
+def _render_export_response(payload: dict[str, Any], fmt: str) -> Any:
+    username = str(payload.get("username", "target"))
+    result = ScanResult.from_dict(payload)
+
+    if fmt == "html":
+        from datetime import datetime, timezone
+
+        from core.investigator_summary import build_investigator_summary
+        from core.reporter.html_export import render_html
+
+        data = result.to_dict()
+        if not data.get("investigator_summary"):
+            data["investigator_summary"] = build_investigator_summary(data)
+        data["exported_at"] = datetime.now(tz=timezone.utc).isoformat()
+        html_content = render_html(data)
+        return HTMLResponse(
+            content=html_content,
+            headers={"Content-Disposition": f'attachment; filename="osint_{username}.html"'},
+        )
+
+    if fmt == "json":
+        return JSONResponse(
+            content=payload,
+            headers={"Content-Disposition": f'attachment; filename="osint_{username}.json"'},
+        )
+
+    if fmt == "stix":
+        from core.reporter.stix_export import build_stix_bundle
+
+        bundle = build_stix_bundle(result)
+        return JSONResponse(
+            content=bundle,
+            headers={"Content-Disposition": f'attachment; filename="osint_{username}_stix.json"'},
+        )
+
+    if fmt == "misp":
+        from core.reporter.misp_export import build_misp_event
+
+        event = build_misp_event(result)
+        return JSONResponse(
+            content=event,
+            headers={"Content-Disposition": f'attachment; filename="osint_{username}_misp.json"'},
+        )
+
+    if fmt == "csv":
+        import tempfile
+
+        from core.reporter.csv_export import export_csv
+
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            tmp_path = tmp.name
+        export_csv(result, tmp_path)
+        return FileResponse(
+            path=tmp_path,
+            filename=f"osint_{username}_csv.zip",
+            media_type="application/zip",
+        )
+
+    if fmt == "pdf":
+        import tempfile
+
+        from core.reporter.pdf_export import export_pdf
+        from core.reporter.pdf_export import is_available as pdf_available
+
+        if not pdf_available():
+            raise HTTPException(status_code=501, detail="PDF export requires 'reportlab'")
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = tmp.name
+        export_pdf(result, tmp_path)
+        return FileResponse(
+            path=tmp_path,
+            filename=f"osint_{username}.pdf",
+            media_type="application/pdf",
+        )
+
+    raise HTTPException(status_code=400, detail=f"unsupported export format: {fmt}")
+
 
 
 # ── App factory ──────────────────────────────────────────────────────
@@ -718,19 +804,44 @@ def build_app() -> FastAPI:
             "removed": list(d.removed),
         }
 
+    @app.get("/export/scan/{scan_id}")
+    async def export_scan_by_id(scan_id: int, format: str = "html") -> Any:
+        entry = get_scan(scan_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="scan not found")
+        return _render_export_response(entry.payload, format.lower())
+
+    @app.get("/export/{username}/latest")
+    async def export_latest_scan(username: str, format: str = "html") -> Any:
+        entry = get_latest(username)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="no scans found for user")
+        return _render_export_response(entry.payload, format.lower())
+
     @app.get("/search")
     async def search_history(
         q: str,
         limit: int = 20,
         username: str | None = None,
+        semantic: bool = False,
     ) -> dict[str, Any]:
         query = (q or "").strip()
         if not query:
             raise HTTPException(status_code=400, detail="q is required")
         capped = max(1, min(int(limit), 100))
+        if semantic:
+            from core.history import search_scans_semantic
+            sem_hits = search_scans_semantic(query, limit=capped)
+            return {
+                "query": query,
+                "mode": "semantic",
+                "count": len(sem_hits),
+                "hits": sem_hits,
+            }
         hits = history_search(query, limit=capped, username=username)
         return {
             "query": query,
+            "mode": "fts5",
             "count": len(hits),
             "hits": [h.to_dict() for h in hits],
         }

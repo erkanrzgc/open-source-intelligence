@@ -14,8 +14,10 @@ HARD_NEGATIVE_STATUSES = frozenset(
         "invalid_username",
         "not_found",
         "soft_404_message",
+        "soft_404_missing_presence",
         "soft_404_redirected",
         "soft_404_template",
+        "soft_404_title",
         "username_not_in_body",
         "verified_bad",
         "verified_fake",
@@ -46,6 +48,8 @@ def evaluate_platform(
             "json_api_absence",
             "url_probe_absence",
             "username_absent",
+            "title_error_marker",
+            "presence_strings_missing",
         )
         if code in signals or status == code
     ]

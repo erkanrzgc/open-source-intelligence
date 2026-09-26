@@ -93,7 +93,7 @@ def client(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(history, "DEFAULT_DB_PATH", hist_db)
     for fn in (
         history.save_scan, history.update_scan_payload, history.list_scans,
-        history.get_latest, history.get_scan,
+        history.get_latest, history.get_scan, history.search_scans_semantic,
     ):
         monkeypatch.setitem(fn.__kwdefaults__, "db_path", hist_db)
     # Pin the JWT secret so tokens are deterministic across the test.
@@ -903,3 +903,94 @@ def test_auth_gate_delete_requires_admin(tmp_path: Path, monkeypatch) -> None:
         "/watchlist/alice",
         headers={"Authorization": f"Bearer {admin_token}"},
     ).status_code == 200
+
+
+def test_export_scan_by_id(client: TestClient) -> None:
+    payload = {
+        "username": "export_test",
+        "total_checked": 1,
+        "found_count": 1,
+        "scan_time": 0.5,
+        "platforms": [
+            {
+                "platform": "GitHub",
+                "url": "https://github.com/export_test",
+                "category": "dev",
+                "exists": True,
+                "status": "found",
+                "confidence": 1.0,
+            }
+        ],
+    }
+    scan_id = history.save_scan(payload, ts=1000)
+    assert scan_id is not None
+
+    # Test HTML export
+    res_html = client.get(f"/export/scan/{scan_id}?format=html")
+    assert res_html.status_code == 200
+    assert "text/html" in res_html.headers.get("content-type", "")
+    assert "export_test" in res_html.text
+
+    # Test JSON export
+    res_json = client.get(f"/export/scan/{scan_id}?format=json")
+    assert res_json.status_code == 200
+    assert res_json.json()["username"] == "export_test"
+
+    # Test STIX export
+    res_stix = client.get(f"/export/scan/{scan_id}?format=stix")
+    assert res_stix.status_code == 200
+    assert "bundle" in res_stix.json().get("type", "")
+
+    # Test CSV export
+    res_csv = client.get(f"/export/scan/{scan_id}?format=csv")
+    assert res_csv.status_code == 200
+    assert "application/zip" in res_csv.headers.get("content-type", "")
+
+    # Test 404
+    res_404 = client.get("/export/scan/999999?format=html")
+    assert res_404.status_code == 404
+
+
+def test_export_latest_scan(client: TestClient) -> None:
+    payload = {
+        "username": "latest_user",
+        "total_checked": 0,
+        "found_count": 0,
+        "scan_time": 0.1,
+        "platforms": [],
+    }
+    history.save_scan(payload, ts=2000)
+
+    res = client.get("/export/latest_user/latest?format=html")
+    assert res.status_code == 200
+    assert "latest_user" in res.text
+
+
+def test_search_endpoint_semantic(client: TestClient) -> None:
+    payload = {
+        "username": "sec_analyst",
+        "total_checked": 1,
+        "found_count": 1,
+        "scan_time": 0.5,
+        "platforms": [
+            {
+                "platform": "GitHub",
+                "exists": True,
+                "profile_data": {
+                    "name": "Security Analyst",
+                    "bio": "Specialist in threat intelligence, OSINT, and reverse engineering.",
+                },
+            }
+        ],
+    }
+    history.save_scan(payload, ts=3000)
+
+    # Test semantic search mode
+    res = client.get("/search?q=threat+intelligence+osint&semantic=true")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["mode"] == "semantic"
+    assert data["count"] >= 1
+    assert any(h["username"] == "sec_analyst" for h in data["hits"])
+
+

@@ -12,6 +12,24 @@ below).
 
 ---
 
+## Agent Çalışma İlkeleri ve Yanıt Kuralları
+
+* Yanıtlarını kısa, net ve doğrudan ver.
+* Yaptığın rutin işlemleri adım adım anlatma.
+* Açıklama yapmadan önce mümkünse doğrudan işlemi gerçekleştir.
+* Ben istemedikçe bariz veya basit şeyleri açıklama.
+* Terminal komutlarının çıktısını önemli bir hata yoksa tekrar etme.
+* Araç ve terminal kullanımını gereksiz yere anlatma.
+* Kod değişikliklerinden sonra yalnızca önemli değişiklikleri belirt.
+* Bir görev tamamlandığında sonucu en fazla 3 kısa maddeyle özetle.
+* Uzun giriş, sonuç ve gereksiz bağlam yazma.
+* İşlem başarılıysa uzun açıklama yapma.
+* Sorun yoksa final cevabını mümkünse 5 satırdan kısa tut.
+* Bir hata varsa yalnızca hatanın nedenini ve gerekli çözümü açıkla.
+* Kod yazarken veya düzenlerken açıklama yerine uygulamaya öncelik ver.
+
+---
+
 ## High-level flow
 
 ```
@@ -133,6 +151,7 @@ Currently shipped skills:
 | `handle_generator.md` | `cfg.full_name`, `_phase_handle_resolve` | Suggest 15 culturally-aware username candidates from a real name. |
 | `profile_validator.md` | `cfg.ai_skills` + borderline confidence | Decide whether a borderline-scored profile belongs to the target. |
 | `exec_summary.md` | `cfg.ai_report` | Produce an optional structured investigator briefing. |
+| `identity_correlator.md` | `ScanConfig.ai_correlate` / target synthesis | Correlate multi-platform profiles, breaches, and signals into a unified identity graph. |
 
 `LLMAnalyzer.analyze()` and the scan engine both route executive summaries
 through `exec_summary.md`; hand-written prompts are retained only as compacting

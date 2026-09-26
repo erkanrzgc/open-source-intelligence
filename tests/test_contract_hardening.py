@@ -6,14 +6,14 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from core.api.server import ScanRequest, _cfg_from_request  # noqa: E402
-from core.config import ScanConfig  # noqa: E402
-from core.models import PlatformResult, ScanResult  # noqa: E402
-from core.scan_service import SCAN_PAYLOAD_SCHEMA_VERSION  # noqa: E402
-from core.version import __version__  # noqa: E402
-from mcp_server import SERVER_INFO  # noqa: E402
-from modules.fp_filter import DEFAULT_THRESHOLD  # noqa: E402
-from modules.recon.models import LeakedSecret  # noqa: E402
+from core.api.server import ScanRequest, _cfg_from_request
+from core.config import ScanConfig
+from core.models import PlatformResult, ScanResult
+from core.scan_service import SCAN_PAYLOAD_SCHEMA_VERSION
+from core.version import __version__
+from mcp_server import SERVER_INFO
+from modules.fp_filter import DEFAULT_THRESHOLD
+from modules.recon.models import LeakedSecret
 
 
 def test_confidence_default_is_shared_by_python_and_rest() -> None:

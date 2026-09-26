@@ -137,11 +137,8 @@ def _coerce(entry: dict[str, Any]) -> Platform:
     category = entry.get("category")
     if not (isinstance(name, str) and isinstance(url, str) and isinstance(category, str)):
         raise ValueError(f"platform entry missing name/url/category: {entry!r}")
-    check_type = entry.get("check_type", "status")
-    if check_type not in _VALID_CHECK_TYPES:
-        raise ValueError(f"platform {name!r} invalid check_type {check_type!r}")
-    if "{username}" not in url and check_type != "json_api":
-        raise ValueError(f"platform {name!r} url must contain {{username}}")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = f"https://{url}"
     headers = entry.get("headers")
     if headers is not None and not isinstance(headers, dict):
         raise ValueError(f"platform {name!r} headers must be a mapping")
@@ -167,6 +164,21 @@ def _coerce(entry: dict[str, Any]) -> Platform:
     check_method = entry.get("check_method", "status")
     if check_method not in ("status", "message", "response_url"):
         raise ValueError(f"platform {name!r} invalid check_method {check_method!r}")
+    check_type = entry.get("check_type")
+    if not check_type:
+        if check_method == "message":
+            if presence and not absence:
+                check_type = "content_present"
+            elif absence:
+                check_type = "content_absent"
+            else:
+                check_type = "status"
+        else:
+            check_type = "status"
+    if check_type not in _VALID_CHECK_TYPES:
+        raise ValueError(f"platform {name!r} invalid check_type {check_type!r}")
+    if "{username}" not in url and check_type != "json_api":
+        raise ValueError(f"platform {name!r} url must contain {{username}}")
     probe_method = entry.get("probe_method", "GET")
     if probe_method not in ("GET", "POST"):
         raise ValueError(f"platform {name!r} invalid probe_method {probe_method!r}")
@@ -414,6 +426,15 @@ def load_platforms() -> list[Platform]:
     return list(merged.values())
 
 
+def _has_typed_provider(name: str) -> bool:
+    try:
+        from modules.providers import has_provider
+
+        return bool(has_provider(name))
+    except Exception:
+        return False
+
+
 def catalogue_summary(platforms: list[Platform] | None = None) -> dict[str, Any]:
     """Return counts, labels and selectable platform metadata for REST/Web."""
     rows = list(platforms) if platforms is not None else load_platforms()
@@ -450,9 +471,11 @@ def catalogue_summary(platforms: list[Platform] | None = None) -> dict[str, Any]
                 "contract_revision": platform.contract_revision,
                 "docs_url": platform.docs_url,
                 "automated": platform.automated,
+                "has_typed_provider": _has_typed_provider(platform.name),
             }
             for platform in sorted(
                 rows,
+
                 key=lambda item: (
                     item.tier != "core",
                     -item.priority,

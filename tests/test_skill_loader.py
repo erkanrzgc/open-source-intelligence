@@ -192,3 +192,11 @@ def test_profile_validator_loads():
     skill = load_skill("profile_validator")
     assert skill.name == "profile_validator"
     assert "match_score" in skill.output_schema.get("required", [])
+
+
+def test_identity_correlator_loads():
+    skill = load_skill("identity_correlator")
+    assert skill.name == "identity_correlator"
+    assert "primary_alias" in skill.output_schema.get("required", [])
+    assert "correlated_profiles" in skill.output_schema.get("required", [])
+

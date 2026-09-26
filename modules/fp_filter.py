@@ -34,6 +34,10 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_OG_TITLE_RE = re.compile(
+    r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
 _CANONICAL_RE = re.compile(
     r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
     re.IGNORECASE,
@@ -44,9 +48,44 @@ _OG_PROFILE_RE = re.compile(
 )
 _H_CARD_RE = re.compile(r'class=["\'][^"\']*h-card[^"\']*["\']', re.IGNORECASE)
 
+_ERROR_TITLE_RE = re.compile(
+    r"(?i)\b("
+    r"404|not\s+found|page\s+not\s+found|user\s+not\s+found|profile\s+not\s+found|"
+    r"doesn.?t\s+exist|does\s+not\s+exist|no\s+such\s+user|no\s+such\s+account|"
+    r"page\s+no\s+longer\s+exists|page\s+unavailable|profile\s+unavailable|"
+    r"something\s+went\s+wrong|error\s+404|resource\s+not\s+found|"
+    r"security\s+verification|client\s+challenge|attention\s+required|"
+    r"just\s+a\s+moment|access\s+denied|suspended\s+account|account\s+suspended|"
+    r"nobody\s+here|cannot\s+be\s+found|can.?t\s+be\s+found"
+    r")\b"
+)
+
 MIN_BODY = 500
 MAX_SCORE = 1.0
 DEFAULT_THRESHOLD = 0.45
+
+
+def extract_html_title(body: str) -> str:
+    """Extract contents of <title> tag if present."""
+    match = _TITLE_RE.search(body)
+    return match.group(1).strip() if match else ""
+
+
+def extract_og_title(body: str) -> str:
+    """Extract og:title content if present."""
+    match = _OG_TITLE_RE.search(body)
+    return match.group(1).strip() if match else ""
+
+
+def looks_like_error_title(title_or_body: str) -> bool:
+    """Check whether a title or HTML body title explicitly signals a 404/error/challenge."""
+    if not title_or_body:
+        return False
+    if "<title" in title_or_body.lower() or "og:title" in title_or_body.lower():
+        t1 = extract_html_title(title_or_body)
+        t2 = extract_og_title(title_or_body)
+        return bool((t1 and _ERROR_TITLE_RE.search(t1)) or (t2 and _ERROR_TITLE_RE.search(t2)))
+    return bool(_ERROR_TITLE_RE.search(title_or_body))
 
 
 @dataclass(frozen=True)
@@ -73,7 +112,16 @@ def score_match(
     body_lower = body.lower()
 
     title_match = _TITLE_RE.search(body)
-    if title_match and uname_lower in title_match.group(1).lower():
+    og_title_match = _OG_TITLE_RE.search(body)
+    title_text = title_match.group(1).strip() if title_match else ""
+    og_title_text = og_title_match.group(1).strip() if og_title_match else ""
+
+    if (title_text and _ERROR_TITLE_RE.search(title_text)) or (
+        og_title_text and _ERROR_TITLE_RE.search(og_title_text)
+    ):
+        score = max(0.0, score - 0.40)
+        signals.append("title_error_marker")
+    elif title_match and uname_lower in title_text.lower():
         score += 0.25
         signals.append("title")
 

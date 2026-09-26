@@ -11,11 +11,11 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-import mcp_server  # noqa: E402
-from core import cli  # noqa: E402
-from core.api import server as api_server  # noqa: E402
-from core.config import ScanConfig  # noqa: E402
-from core.models import IdentityCandidate, PlatformResult, ScanResult  # noqa: E402
+import mcp_server
+from core import cli
+from core.api import server as api_server
+from core.config import ScanConfig
+from core.models import IdentityCandidate, PlatformResult, ScanResult
 
 
 def _golden_result() -> ScanResult:

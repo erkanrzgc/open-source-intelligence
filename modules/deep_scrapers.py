@@ -323,13 +323,21 @@ async def scrape_twitter(client: HTTPClient, username: str) -> dict:
     url = f"https://cdn.syndication.twimg.com/timeline/profile?screen_name={username}"
     headers = {"Accept": "application/json"}
     status, data, _ = await client.get_json(url, headers=headers)
-    if status != 200 or not data:
+    if status != 200 or not data or not isinstance(data, dict):
         return {}
     headline = data.get("headline", {}) or {}
+    user_info = data.get("user", {}) or {}
+    avatar = user_info.get("profile_image_url_https") or headline.get("image") or ""
+    bio_text = ""
+    if isinstance(headline.get("description"), dict):
+        bio_text = headline.get("description", {}).get("text", "")
+    elif isinstance(user_info.get("description"), str):
+        bio_text = user_info.get("description", "")
     return {
-        "name": headline.get("title", ""),
+        "name": headline.get("title") or user_info.get("name", ""),
         "username": username,
-        "bio": (headline.get("description") or {}).get("text", "") if isinstance(headline.get("description"), dict) else "",
+        "bio": bio_text,
+        "avatar_url": avatar,
     }
 
 
@@ -443,6 +451,77 @@ async def scrape_npm(client: HTTPClient, username: str) -> dict:
     }
 
 
+async def scrape_bluesky(client: HTTPClient, username: str) -> dict:
+    actor = username if "." in username else f"{username}.bsky.social"
+    url = f"https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={actor}"
+    status, data, _ = await client.get_json(url)
+    if status != 200 or not isinstance(data, dict):
+        return {}
+    return {
+        "name": data.get("displayName", ""),
+        "username": data.get("handle", username),
+        "bio": data.get("description", ""),
+        "avatar_url": data.get("avatar", ""),
+        "followers": data.get("followersCount", 0),
+        "following": data.get("followsCount", 0),
+        "posts": data.get("postsCount", 0),
+        "created_at": data.get("createdAt", ""),
+    }
+
+
+async def scrape_telegram(client: HTTPClient, username: str) -> dict:
+    url = f"https://t.me/{username}"
+    status, body, _ = await client.get(url)
+    if status != 200 or not body:
+        return {}
+    from modules.profile_extract import extract_profile
+    extracted = extract_profile(body)
+    m = re.search(r'<div class="tgme_page_extra">([^<]+)</div>', body)
+    if m:
+        extracted["subscribers_text"] = m.group(1).strip()
+    extracted["username"] = username
+    return extracted
+
+
+async def scrape_gravatar(client: HTTPClient, username: str) -> dict:
+    url = f"https://en.gravatar.com/{username}.json"
+    status, data, _ = await client.get_json(url)
+    if status != 200 or not isinstance(data, dict):
+        return {}
+    entry = (data.get("entry") or [{}])[0]
+    if not entry:
+        return {}
+    name_obj = entry.get("name") or {}
+    full_name = entry.get("displayName") or (f"{name_obj.get('givenName', '')} {name_obj.get('familyName', '')}").strip()
+    return {
+        "name": full_name,
+        "username": entry.get("preferredUsername", username),
+        "bio": entry.get("aboutMe", ""),
+        "location": entry.get("currentLocation", ""),
+        "avatar_url": entry.get("thumbnailUrl", ""),
+        "profile_url": entry.get("profileUrl", ""),
+        "urls": [u.get("value") for u in entry.get("urls", []) if isinstance(u, dict) and u.get("value")],
+    }
+
+
+async def scrape_mastodon(client: HTTPClient, username: str) -> dict:
+    url = f"https://mastodon.social/api/v1/accounts/lookup?acct={username}"
+    status, data, _ = await client.get_json(url)
+    if status != 200 or not isinstance(data, dict):
+        return {}
+    note = re.sub(r"<[^>]+>", " ", data.get("note", "")).strip()
+    return {
+        "name": data.get("display_name", ""),
+        "username": data.get("username", username),
+        "bio": note,
+        "avatar_url": data.get("avatar", ""),
+        "followers": data.get("followers_count", 0),
+        "following": data.get("following_count", 0),
+        "posts": data.get("statuses_count", 0),
+        "created_at": data.get("created_at", ""),
+    }
+
+
 DEEP_SCRAPERS = {
     "GitHub": scrape_github,
     "GitLab": scrape_gitlab,
@@ -457,4 +536,11 @@ DEEP_SCRAPERS = {
     "TikTok": scrape_tiktok,
     "YouTube": scrape_youtube,
     "npm": scrape_npm,
+    "Reddit": scrape_reddit,
+    "X": scrape_twitter,
+    "Twitter": scrape_twitter,
+    "Bluesky": scrape_bluesky,
+    "Telegram": scrape_telegram,
+    "Gravatar": scrape_gravatar,
+    "Mastodon": scrape_mastodon,
 }

@@ -260,3 +260,170 @@ async def test_tools_call_add_watchlist(monkeypatch):
     assert resp is not None
     content = resp["result"]["content"][0]["text"]
     assert '"username": "alice"' in content
+
+
+@pytest.mark.asyncio
+async def test_tools_call_scan_phone(monkeypatch):
+    class FakeIntel:
+        def to_dict(self):
+            return {"raw": "+14155552671", "valid": True, "carrier": "TestCarrier"}
+
+    async def fake_lookup(client, raw, default_region=None):
+        return FakeIntel()
+
+    import modules.phone.orchestrator
+    monkeypatch.setattr(modules.phone.orchestrator, "lookup_phone", fake_lookup)
+
+    resp = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 60,
+            "method": "tools/call",
+            "params": {
+                "name": "scan_phone",
+                "arguments": {"phone": "+14155552671"},
+            },
+        }
+    )
+    assert resp is not None
+    assert "TestCarrier" in resp["result"]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tools_call_scan_crypto(monkeypatch):
+    class FakeCrypto:
+        def to_dict(self):
+            return {"address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "network": "btc", "balance": "50.0"}
+
+    async def fake_lookup(client, addresses):
+        return [FakeCrypto()]
+
+    import modules.crypto.orchestrator
+    monkeypatch.setattr(modules.crypto.orchestrator, "lookup_crypto", fake_lookup)
+
+    resp = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 61,
+            "method": "tools/call",
+            "params": {
+                "name": "scan_crypto",
+                "arguments": {"addresses": ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]},
+            },
+        }
+    )
+    assert resp is not None
+    assert "50.0" in resp["result"]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tools_call_scan_email(monkeypatch):
+    async def fake_scan(cfg):
+        return ScanResult(username=cfg.username)
+
+    monkeypatch.setattr(mcp_server, "run_scan", fake_scan)
+
+    resp = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 62,
+            "method": "tools/call",
+            "params": {
+                "name": "scan_email",
+                "arguments": {"email": "test@example.com"},
+            },
+        }
+    )
+    assert resp is not None
+    assert "test" in resp["result"]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tools_call_manage_case(tmp_path, monkeypatch):
+    from core import cases
+    db_file = tmp_path / "test_cases.sqlite3"
+    monkeypatch.setattr(cases, "DEFAULT_DB_PATH", db_file)
+    for fn in (
+        cases.create_case, cases.get_case, cases.list_cases,
+        cases.update_case, cases.delete_case,
+        cases.add_note, cases.list_notes, cases.delete_note,
+        cases.add_bookmark, cases.list_bookmarks, cases.delete_bookmark,
+    ):
+        monkeypatch.setitem(fn.__kwdefaults__, "db_path", db_file)
+
+    # 1. Create case
+
+    resp = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 63,
+            "method": "tools/call",
+            "params": {
+                "name": "manage_case",
+                "arguments": {"action": "create", "name": "Operation Titan", "description": "Test case"},
+            },
+        }
+    )
+    assert resp is not None
+    assert "Operation Titan" in resp["result"]["content"][0]["text"]
+
+    # 2. Add note
+    resp_note = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 64,
+            "method": "tools/call",
+            "params": {
+                "name": "manage_case",
+                "arguments": {"action": "add_note", "case_id": 1, "body": "Suspect located", "author": "agent_007"},
+            },
+        }
+    )
+    assert resp_note is not None
+    assert "Suspect located" in resp_note["result"]["content"][0]["text"]
+
+    # 3. Get case
+    resp_get = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 65,
+            "method": "tools/call",
+            "params": {
+                "name": "manage_case",
+                "arguments": {"action": "get", "case_id": 1},
+            },
+        }
+    )
+    assert resp_get is not None
+    assert "Operation Titan" in resp_get["result"]["content"][0]["text"]
+    assert "Suspect located" in resp_get["result"]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tools_call_export_scan(tmp_path, monkeypatch):
+    out_file = tmp_path / "report.html"
+    sample = {
+        "username": "eve",
+        "total_checked": 0,
+        "found_count": 0,
+        "scan_time": 0.1,
+        "platforms": [],
+    }
+    mock_entry = type("Entry", (), {"payload": sample})()
+    monkeypatch.setattr(mcp_server, "get_latest", lambda u: mock_entry)
+
+    resp = await _dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 66,
+            "method": "tools/call",
+            "params": {
+                "name": "export_scan",
+                "arguments": {"username": "eve", "format": "html", "output_path": str(out_file)},
+            },
+        }
+    )
+    assert resp is not None
+    assert out_file.is_file()
+    assert "eve" in out_file.read_text(encoding="utf-8")
+
