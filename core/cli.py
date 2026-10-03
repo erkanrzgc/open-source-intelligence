@@ -450,6 +450,8 @@ def _cli_history(argv: list[str]) -> int:
     parser.add_argument("--semantic", "-s", action="store_true", help="Perform natural language semantic search")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Maximum number of results to display")
     args = parser.parse_args(argv)
+    if args.limit <= 0:
+        parser.error("--limit must be positive")
 
     if not args.query:
         scans = history.list_scans(limit=args.limit)
@@ -490,7 +492,7 @@ def _cli_history(argv: list[str]) -> int:
         console.print(table)
         return 0
     else:
-        scans = [s for s in history.list_scans(limit=100) if args.query.lower() in s.username.lower()][:args.limit]
+        scans = history.list_scans(username_contains=args.query, limit=args.limit)
         if not scans:
             console.print(f"[yellow]No scans found matching username {args.query!r}[/yellow]")
             return 0
@@ -517,6 +519,18 @@ def main(argv: list[str] | None = None) -> int:
             return _cli_export(argv[1:])
         if argv[0] == "history":
             return _cli_history(argv[1:])
+        if argv[0] == "workbench":
+            from core.investigation import load_workbench
+
+            parser = argparse.ArgumentParser(prog="osint workbench")
+            parser.add_argument("case_id", type=int)
+            args = parser.parse_args(argv[1:])
+            try:
+                print(json.dumps(load_workbench(args.case_id), ensure_ascii=False, indent=2))
+                return 0
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
+                return 1
 
     return asyncio.run(_interactive())
 
@@ -544,6 +558,8 @@ def _cli_scan(argv: list[str]) -> int:
         help="Alias candidate cap; candidates 13-24 use adaptive fallback",
     )
     parser.add_argument("--alias-platform-limit", type=int, default=15)
+    parser.add_argument("--platform", action="append", default=[], help="Restrict platform probes by exact catalogue name (repeatable)")
+    parser.add_argument("--http-request-budget", type=int, help="Cap central HTTP attempts, including retries; disables HTTP redirects")
     parser.add_argument("--email", action="store_true")
     parser.add_argument("--breach", action="store_true")
     parser.add_argument("--photo", action="store_true")
@@ -652,6 +668,8 @@ def _cli_scan(argv: list[str]) -> int:
         categories=categories,
         platform_scope=platform_scope,
         alias_max_candidates=args.alias_max_candidates,
+        platform_names=tuple(args.platform),
+        http_request_budget=args.http_request_budget,
         alias_platform_limit=args.alias_platform_limit,
         request_timeout=args.timeout,
         ai_skills=args.ai,
@@ -667,6 +685,8 @@ async def _run_scan_fast(
     cfg: ScanConfig, args: argparse.Namespace | None = None
 ) -> int:
     platforms = _selected_platforms(cfg.categories, cfg.platform_scope)
+    if cfg.platform_names:
+        platforms = [platform for platform in platforms if platform.name in cfg.platform_names]
     _print_header(cfg.username, cfg.full_name, len(platforms))
 
     progress = Progress(

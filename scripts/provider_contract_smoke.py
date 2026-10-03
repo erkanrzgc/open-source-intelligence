@@ -22,6 +22,7 @@ from typing import Any
 
 from core.http_client import HTTPClient
 from core.models import ProbeOutcome
+from modules.platforms import PLATFORMS
 from modules.providers import (
     PROVIDERS,
     ProviderCredentials,
@@ -77,11 +78,17 @@ PROVIDER_SMOKE_FIXTURES: dict[str, ProviderSmokeFixture] = {
 
 def _safe_observation(observation: ProviderObservation) -> dict[str, Any]:
     """Serialize contract metadata without raw response data or secrets."""
+    platform = next((p for p in PLATFORMS if p.name == observation.provider), None)
     return {
+        "profile_url": (
+            platform.url.replace("{username}", observation.requested_username)
+            if platform else None
+        ),
         "requested_username": observation.requested_username,
         "canonical_username": observation.canonical_username,
         "outcome": observation.outcome.value,
         "http_status": observation.http_status,
+        "checked_at": observation.checked_at.isoformat(),
         "evidence_class": observation.evidence_class,
         "entity_scope": observation.entity_scope,
         "contract_revision": observation.contract_revision,
@@ -127,6 +134,7 @@ async def run_provider_contract_smoke(
         raise ValueError(
             f"unknown required provider(s): {', '.join(unknown_required)}"
         )
+    selected = list(dict.fromkeys([*selected, *required_providers]))
 
     prepared = await prepare_provider_credentials(
         client,

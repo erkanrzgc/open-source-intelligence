@@ -1,4 +1,5 @@
 """Public contract and package metadata hardening tests."""
+# ruff: noqa: E402 -- optional FastAPI must be checked before importing adapters.
 
 from __future__ import annotations
 
@@ -30,6 +31,15 @@ def test_identity_defaults_are_shared_by_python_and_rest() -> None:
     assert rest_cfg.alias_platform_limit == python_cfg.alias_platform_limit == 15
 
 
+def test_bounded_platform_options_share_config_validation():
+    req = ScanRequest(username="alice", platform_names=["GitHub"], http_request_budget=3)
+    cfg = _cfg_from_request(req)
+    assert cfg.platform_names == ("GitHub",)
+    assert cfg.http_request_budget == 3
+    with pytest.raises(ValueError):
+        ScanConfig(username="alice", http_request_budget=0)
+
+
 def test_project_and_mcp_versions_share_one_source() -> None:
     assert SERVER_INFO["version"] == __version__
 
@@ -52,7 +62,7 @@ def test_new_payload_schema_and_verification_are_declared() -> None:
     assert payload["platforms"][0]["verification"]["verdict"] == "uncertain"
     assert payload["found_count"] == 0
     assert payload["verification_counts"]["uncertain"] == 1
-    assert SCAN_PAYLOAD_SCHEMA_VERSION == "2026-08-09"
+    assert SCAN_PAYLOAD_SCHEMA_VERSION == "2026-10-01"
 
 
 def test_secret_findings_serialize_only_fingerprint_and_safe_preview() -> None:
@@ -68,3 +78,16 @@ def test_secret_findings_serialize_only_fingerprint_and_safe_preview() -> None:
     assert len(secret["fingerprint"]) == 64
     assert "super-secret-value" not in secret["safe_preview"]
     assert "super-secret-value" not in secret["snippet"]
+
+
+def test_observation_provenance_survives_serialization():
+    row = PlatformResult(
+        platform="GitHub", url="https://github.com/alice", category="dev",
+        checked_at="2026-10-01T20:00:00+00:00", http_status=429,
+        status="blocked", contract_revision="fixture-v1",
+    )
+    restored = PlatformResult.from_dict(row.to_dict())
+    assert restored.checked_at == row.checked_at
+    assert restored.http_status == 429
+    assert restored.contract_revision == "fixture-v1"
+    assert PlatformResult.from_dict({}).checked_at is None

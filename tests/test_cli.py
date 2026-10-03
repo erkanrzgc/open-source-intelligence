@@ -126,3 +126,23 @@ def test_cli_export_invalid_target():
     with patch("core.history.get_latest", return_value=None):
         code = cli.main(["export", "nonexistent_target", "--format", "html", "-o", "dummy.html"])
         assert code == 1
+
+
+def test_cli_history_lists_and_filters_real_store(tmp_path, monkeypatch):
+    from core import history
+
+    db = tmp_path / "history.sqlite3"
+    monkeypatch.setitem(history.list_scans.__kwdefaults__, "db_path", db)
+    history.save_scan({"username": "alice_dev", "platforms": []}, ts=1000, db_path=db)
+    assert cli.main(["history"]) == 0
+    assert cli.main(["history", "ALICE"]) == 0
+
+
+def test_cli_maps_platform_allowlist_and_http_cap(monkeypatch):
+    run = AsyncMock(return_value=0)
+    monkeypatch.setattr(cli, "_run_scan_fast", run)
+    assert cli.main(["scan", "alice", "--platform", "GitHub", "--http-request-budget", "3", "--no-smart"]) == 0
+    cfg = run.call_args.args[0]
+    assert cfg.platform_names == ("GitHub",)
+    assert cfg.http_request_budget == 3
+    assert not cfg.smart

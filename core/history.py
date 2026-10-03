@@ -157,16 +157,20 @@ def update_scan_payload(
 
 
 def list_scans(
-    username: str, *, limit: int = 20, db_path: Path = DEFAULT_DB_PATH
+    username: str | None = None, *, limit: int = 20,
+    username_contains: str | None = None, db_path: Path = DEFAULT_DB_PATH
 ) -> list[HistoryEntry]:
-    if not db_path.exists():
+    """List recent scans, optionally filtering before applying the limit."""
+    if limit <= 0 or not db_path.exists():
         return []
     conn = _connect(db_path)
     try:
         rows = conn.execute(
             "SELECT id, username, ts, found_count, payload FROM scans "
-            "WHERE username = ? ORDER BY ts DESC LIMIT ?",
-            (username, limit),
+            "WHERE (? IS NULL OR username = ?) "
+            "AND (? IS NULL OR instr(lower(username), lower(?)) > 0) "
+            "ORDER BY ts DESC, id DESC LIMIT ?",
+            (username, username, username_contains, username_contains, limit),
         ).fetchall()
     finally:
         conn.close()
@@ -295,7 +299,8 @@ def prune_provider_data(
         for scan_id, payload_raw in rows:
             try:
                 payload = json.loads(payload_raw)
-            except Exception:
+            except (json.JSONDecodeError, TypeError):
+                log.warning("history: skipping malformed scan %s during retention", scan_id)
                 continue
             modified = False
             for p in payload.get("platforms", []):
@@ -380,5 +385,4 @@ def search_scans_semantic(
         return []
     finally:
         conn.close()
-
 

@@ -209,6 +209,13 @@ manual — the code is the source of truth.
 
 ## Configuration surface
 
+The case workbench at `core/investigation/` projects explicitly linked history
+into a provenance graph, snapshot timeline and bounded lead proposals. REST
+serves `/cases/{id}/workbench`; CLI `osint workbench` and MCP
+`get_case_workbench` share the same read-only projector. Explicit pivot jobs
+use ScanConfig, the existing job store and central HTTP request budgeting.
+See `core/investigation/SKILL.md` and `docs/case-workbench.md` for contracts.
+
 `ScanConfig` (frozen dataclass at `core/config.py`) is the **only**
 sanctioned way to drive a scan. Adding a new feature means:
 

@@ -24,6 +24,27 @@ def test_scan_job_event_backlog_is_capped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_running_job_cancellation_propagates_and_notifies_once():
+    started = asyncio.Event()
+    async def runner(cfg):
+        started.set()
+        await asyncio.Event().wait()
+        return ScanResult(username=cfg.username)
+    notifications = []
+    store = ScanJobStore(runner=runner)
+    job = store.create_job(ScanConfig(username="alice"), {}, save_history=False,
+                           on_finish=lambda j: notifications.append(j.status))
+    task = job._task
+    await started.wait()
+    store.cancel(job.id)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert job.status == "cancelled"
+    assert job.finished_at is not None
+    assert notifications == ["cancelled"]
+
+
+@pytest.mark.asyncio
 async def test_scan_job_store_rejects_when_queue_full(monkeypatch) -> None:
     monkeypatch.setattr(
         jobs_mod,

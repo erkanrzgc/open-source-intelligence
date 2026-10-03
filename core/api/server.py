@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from core import auth, cases, watchlist
 from core.api.cytoscape import payload_to_cytoscape
-from core.api.jobs import ScanJobStore
+from core.api.jobs import ScanJob, ScanJobStore
 from core.capabilities import collect_capabilities
 from core.compare import compare_payloads
 from core.config import REQUEST_TIMEOUT, ScanConfig
@@ -29,6 +29,8 @@ from core.correlation import correlate
 from core.engine import run_scan
 from core.history import diff_entries, get_latest, get_scan, list_scans
 from core.http_client import HTTPClient
+from core.investigation import PIVOT_PLATFORMS, load_workbench, pivot_config
+from core.investigation import store as investigation_store
 from core.logging_setup import get_logger
 from core.models import ScanResult
 from core.platform_loader import catalogue_summary
@@ -65,12 +67,9 @@ async def _auth_dependency(request: Request) -> None:
         return
 
     header = request.headers.get("authorization", "")
-    token = ""
-    if header.lower().startswith("bearer "):
-        token = header.split(" ", 1)[1].strip()
-    elif "token" in request.query_params:
-        token = request.query_params["token"].strip()
-
+    if not header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    token = header.split(" ", 1)[1].strip()
     if not token:
         raise HTTPException(status_code=401, detail="missing bearer token")
     try:
@@ -120,6 +119,8 @@ class ScanRequest(BaseModel):
     proxies: list[str] = Field(default_factory=list)
     categories: list[str] | None = None
     platform_scope: str = Field(default="core", pattern="^(core|full)$")
+    platform_names: list[str] = Field(default_factory=list, max_length=500)
+    http_request_budget: int | None = Field(default=None, ge=1, le=10000)
     alias_max_candidates: int = Field(
         default=24,
         ge=1,
@@ -180,6 +181,19 @@ class CaseCreateRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = ""
     tags: list[str] = Field(default_factory=list)
+
+
+class EdgeReviewRequest(BaseModel):
+    decision: str = Field(pattern="^(accepted|rejected|unreviewed)$")
+    note: str = Field(default="", max_length=2000)
+
+
+class PivotRequest(BaseModel):
+    lead_id: str = Field(min_length=1, max_length=100)
+    platforms: list[str] = Field(
+        default_factory=lambda: list(PIVOT_PLATFORMS[:4]), min_length=1, max_length=6
+    )
+    request_budget: int = Field(default=8, ge=1, le=20)
 
 
 class CaseUpdateRequest(BaseModel):
@@ -254,6 +268,8 @@ def _cfg_from_request(req: ScanRequest, *, enforce_paths: bool = False) -> ScanC
         proxies=tuple(req.proxies),
         categories=tuple(req.categories) if req.categories else None,
         platform_scope=req.platform_scope,
+        platform_names=tuple(req.platform_names),
+        http_request_budget=req.http_request_budget,
         alias_max_candidates=req.alias_max_candidates,
         alias_platform_limit=req.alias_platform_limit,
         request_timeout=req.request_timeout,
@@ -573,6 +589,14 @@ def build_app() -> FastAPI:
             raise HTTPException(status_code=409, detail=f"scan job is still {job.status}")
         return job.result
 
+    @app.post("/scan-jobs/{job_id}/cancel")
+    async def cancel_scan_job(job_id: str, request: Request) -> dict[str, Any]:
+        store: ScanJobStore = request.app.state.scan_jobs
+        job = store.cancel(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="scan job not found")
+        return job.to_dict()
+
     @app.get("/scan-jobs/{job_id}/events")
     async def stream_scan_job_events(job_id: str, request: Request) -> StreamingResponse:
         store: ScanJobStore = request.app.state.scan_jobs
@@ -889,6 +913,81 @@ def build_app() -> FastAPI:
         if updated is None:
             raise HTTPException(status_code=404, detail="case not found")
         return updated.to_dict()
+
+    def case_workbench(case_id: int, request: Request) -> dict:
+        try:
+            view = load_workbench(case_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        for pivot in view["pivots"]:
+            job = request.app.state.scan_jobs.get(pivot.get("job_id"))
+            if job is not None and pivot["status"] != "partial":
+                pivot["status"] = job.status
+            elif pivot["status"] in {"reserved", "queued", "running"}:
+                pivot["status"] = "interrupted"
+        return view
+
+    @app.get("/cases/{case_id}/workbench")
+    async def cases_workbench(case_id: int, request: Request) -> dict:
+        return case_workbench(case_id, request)
+
+    @app.put("/cases/{case_id}/edges/{edge_id}/review")
+    async def cases_review_edge(
+        case_id: int, edge_id: str, req: EdgeReviewRequest, request: Request
+    ) -> dict:
+        view = case_workbench(case_id, request)
+        if not any(row["data"]["id"] == edge_id for row in view["graph"]["edges"]):
+            raise HTTPException(status_code=404, detail="edge not found in this case")
+        actor = str(getattr(request.state, "user", {}).get("sub") or "local")
+        return investigation_store.save_review(case_id, edge_id, req.decision, req.note, actor)
+
+    @app.post("/cases/{case_id}/pivots", status_code=202)
+    async def cases_run_pivot(case_id: int, req: PivotRequest, request: Request) -> dict:
+        view = case_workbench(case_id, request)
+        lead = next((row for row in view["leads"] if row["id"] == req.lead_id), None)
+        if lead is None:
+            raise HTTPException(status_code=404, detail="lead not found in this case")
+        try:
+            cfg = pivot_config(lead["username"], req.platforms, req.request_budget)
+            pivot_id = investigation_store.reserve_pivot(
+                case_id, lead, req.platforms, req.request_budget
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        metadata = {
+            "pivot_id": pivot_id,
+            "lead_id": lead["id"],
+            "source_scan_id": lead["source_scan_id"],
+            "depth": lead["depth"],
+        }
+
+        def finish_pivot(job: ScanJob) -> None:
+            budget = ((job.result or {}).get("diagnostics") or {}).get("http_budget") or {}
+            status = (
+                "partial" if job.status == "completed" and budget.get("exhausted") else job.status
+            )
+            investigation_store.update_pivot(
+                pivot_id, status=status, job_id=job.id, scan_id=job.scan_id
+            )
+
+        try:
+            job = request.app.state.scan_jobs.create_job(
+                cfg,
+                {
+                    "username": cfg.username,
+                    "platform_names": list(cfg.platform_names),
+                    "http_request_budget": cfg.http_request_budget,
+                    "investigation": metadata,
+                },
+                save_history=True,
+                case_id=case_id,
+                on_finish=finish_pivot,
+            )
+        except RuntimeError as exc:
+            investigation_store.release_unstarted(pivot_id)
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        investigation_store.update_pivot(pivot_id, status="queued", job_id=job.id)
+        return {"pivot_id": pivot_id, "job": job.to_dict()}
 
     @app.delete("/cases/{case_id}")
     async def cases_delete(case_id: int) -> dict[str, Any]:

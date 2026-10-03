@@ -48,6 +48,7 @@ class ScanJob:
     max_events: int = 500
     _subs: list[asyncio.Queue[dict[str, Any] | None]] = field(default_factory=list, repr=False)
     _task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _on_finish: Callable[[ScanJob], None] | None = field(default=None, repr=False)
 
     def publish(self, event: dict[str, Any]) -> None:
         self.events.append(event)
@@ -124,6 +125,7 @@ class ScanJobStore:
         *,
         save_history: bool,
         case_id: int | None = None,
+        on_finish: Callable[[ScanJob], None] | None = None,
     ) -> ScanJob:
         self._prune_finished()
         if len(self._jobs) >= self._max_jobs:
@@ -135,6 +137,7 @@ class ScanJobStore:
             save_history=save_history,
             case_id=case_id,
             max_events=self._max_events_per_job,
+            _on_finish=on_finish,
         )
         self._jobs[job.id] = job
         job.publish(
@@ -158,6 +161,27 @@ class ScanJobStore:
 
     def get(self, job_id: str) -> ScanJob | None:
         return self._jobs.get(job_id)
+
+    def cancel(self, job_id: str) -> ScanJob | None:
+        job = self.get(job_id)
+        if job is not None and job.finished_at is None:
+            job.status = "cancelled"
+            job.finished_at = int(time.time())
+            if job._task is not None:
+                job._task.cancel()
+            job.publish({"kind": "job_finished", "phase": "done", "data": {"status": "cancelled"}})
+            self._finish_hook(job)
+            job.close()
+        return job
+
+    @staticmethod
+    def _finish_hook(job: ScanJob) -> None:
+        callback, job._on_finish = job._on_finish, None
+        if callback is not None:
+            try:
+                callback(job)
+            except Exception:
+                log.exception("scan job %s completion hook failed", job.id)
 
     def _prune_finished(self) -> None:
         overflow = len(self._jobs) - self._max_jobs + 1
@@ -200,6 +224,8 @@ class ScanJobStore:
             set_emitter(emitter)
             try:
                 result = await self._runner(cfg)
+                if job.request.get("investigation"):
+                    result.diagnostics["investigation"] = dict(job.request["investigation"])
                 completed = complete_scan_result(
                     result,
                     cfg,
@@ -251,3 +277,4 @@ class ScanJobStore:
                     }
                 )
                 job.close()
+                self._finish_hook(job)

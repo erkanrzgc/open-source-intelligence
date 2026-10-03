@@ -1,0 +1,40 @@
+{
+  "dataset_id": "synthetic-identity-regression-v1",
+  "data_kind": "synthetic_development",
+  "identity_pairs": [
+    {"id":"same_direct_link","same_person":true,"label_reason":"Synthetic owned accounts with explicit profile link","direct_link":true,"left":{},"right":{}},
+    {"id":"same_verified_email","same_person":true,"label_reason":"Synthetic verified personal contact","left":{"profile":{"verified_emails":["alice@example.test"]}},"right":{"profile":{"verified_emails":["alice@example.test"]}}},
+    {"id":"same_verified_phone","same_person":true,"label_reason":"Synthetic verified personal contact","left":{"profile":{"verified_phones":["+12025550123"]}},"right":{"profile":{"verified_phones":["+12025550123"]}}},
+    {"id":"same_name_website","same_person":true,"label_reason":"Synthetic owner uses personal website and name on both accounts","left":{"profile":{"name":"Alice Example","website_url":"https://alice.example.test"}},"right":{"profile":{"name":"Alice Example","website_url":"https://alice.example.test/"}}},
+    {"id":"same_name_social","same_person":true,"label_reason":"Synthetic owner declares same personal external account and name","left":{"profile":{"name":"Alice Example","github_username":"alice-owner"}},"right":{"profile":{"name":"Alice Example","github_username":"alice-owner"}}},
+    {"id":"same_name_phash","same_person":true,"label_reason":"Synthetic non-default avatar and display name","left":{"profile":{"name":"Alice Example","avatar_phash":"a123b456c789d012","avatar_is_default":false}},"right":{"profile":{"name":"Alice Example","avatar_phash":"a123b456c789d012","avatar_is_default":false}}},
+    {"id":"same_location_phash","same_person":true,"label_reason":"Synthetic non-default avatar and declared city","left":{"profile":{"location":"Istanbul","avatar_phash":"a123b456c789d012","avatar_is_default":false}},"right":{"profile":{"location":"Istanbul","avatar_phash":"a123b456c789d012","avatar_is_default":false}}},
+    {"id":"same_organization_website","same_person":true,"label_reason":"Synthetic personal website and organization membership","left":{"profile":{"company":"Example Lab","website_url":"https://alice.example.test"}},"right":{"profile":{"company":"Example Lab","website_url":"https://alice.example.test"}}},
+    {"id":"same_sparse_name","same_person":true,"label_reason":"Known synthetic owner exposes only name; expected abstention is a recall miss","left":{"profile":{"name":"Alice Example"}},"right":{"profile":{"name":"Alice Example"}}},
+    {"id":"same_sparse_name_bio","same_person":true,"label_reason":"Known synthetic owner lacks independent strong evidence","left":{"profile":{"name":"Alice Example","bio":"I build observability tools for distributed systems"}},"right":{"profile":{"name":"Alice Example","bio":"I build observability tools for distributed systems"}}},
+    {"id":"same_handle_only","same_person":true,"label_reason":"Known synthetic owner but no public metadata","left":{},"right":{}},
+    {"id":"same_unrelated_alias","same_person":true,"label_reason":"Known synthetic owner chooses unrelated handles and publishes no metadata","left":{"username":"alicesmith"},"right":{"username":"moonwalker77"}},
+    {"id":"different_handle_only","same_person":false,"label_reason":"Distinct synthetic owners with similar handles","left":{},"right":{}},
+    {"id":"different_same_name","same_person":false,"label_reason":"Synthetic namesakes","left":{"profile":{"name":"Alex Smith"}},"right":{"profile":{"name":"Alex Smith"}}},
+    {"id":"different_name_city","same_person":false,"label_reason":"Synthetic namesakes in the same city","left":{"profile":{"name":"Alex Smith","location":"London"}},"right":{"profile":{"name":"Alex Smith","location":"London"}}},
+    {"id":"different_boilerplate_bio","same_person":false,"label_reason":"Distinct owners copy a generic bio","left":{"profile":{"bio":"Software engineer building useful open source tools"}},"right":{"profile":{"bio":"Software engineer building useful open source tools"}}},
+    {"id":"different_default_avatar","same_person":false,"label_reason":"Namesakes share a provider default avatar","left":{"profile":{"name":"Alex Smith","avatar_phash":"a123b456c789d012","avatar_is_default":true}},"right":{"profile":{"name":"Alex Smith","avatar_phash":"a123b456c789d012","avatar_is_default":true}}},
+    {"id":"different_avatar_url","same_person":false,"label_reason":"Namesakes share a stock image URL; no image hash verification","left":{"profile":{"name":"Alex Smith","avatar_url":"https://cdn.example.test/stock.jpg"}},"right":{"profile":{"name":"Alex Smith","avatar_url":"https://cdn.example.test/stock.jpg"}}},
+    {"id":"different_duplicate_external_evidence","same_person":false,"label_reason":"Both link one shared team account represented twice; not independent evidence","left":{"profile":{"website_url":"https://github.com/example-team","github_username":"example-team"}},"right":{"profile":{"website_url":"https://github.com/example-team","github_username":"example-team"}}},
+    {"id":"different_unverified_contact","same_person":false,"label_reason":"Public shared support address does not verify ownership","left":{"profile":{"email":"support@example.test"}},"right":{"profile":{"email":"support@example.test"}}},
+    {"id":"different_shared_org_city","same_person":false,"label_reason":"Different coworkers in the same city","left":{"profile":{"company":"Example Lab","location":"London"}},"right":{"profile":{"company":"Example Lab","location":"London"}}},
+    {"id":"different_unrelated","same_person":false,"label_reason":"Distinct synthetic owners with unrelated metadata","left":{"username":"orbit","profile":{"name":"Anita Rao","bio":"Radio astronomy","location":"Delhi"}},"right":{"username":"bread","profile":{"name":"Tom Baker","bio":"Fresh pastry","location":"Dublin"}}},
+    {"id":"different_phash_without_default_check","same_person":false,"label_reason":"Namesakes share a hash but default-avatar status is unknown","left":{"profile":{"name":"Alex Smith","avatar_phash":"a123b456c789d012"}},"right":{"profile":{"name":"Alex Smith","avatar_phash":"a123b456c789d012"}}},
+    {"id":"different_shared_site_only","same_person":false,"label_reason":"Distinct owners link the same organization website","left":{"profile":{"website_url":"https://example.test"}},"right":{"profile":{"website_url":"https://example.test"}}}
+  ],
+  "alias_discovery": [
+    {"id":"repeat_last","username":"erkanrzgc","alias":"erkanrzgcc"},
+    {"id":"remove_repeat","username":"alicee","alias":"alice"},
+    {"id":"deletion","username":"alice","alias":"alce"},
+    {"id":"transpose","username":"alice","alias":"alcie"},
+    {"id":"separator","username":"alice_dev","alias":"alicedev"},
+    {"id":"numeric","username":"alice42","alias":"alice"},
+    {"id":"explicit_link","username":"alice","alias":"moonwalker77","linked_usernames":["moonwalker77"]},
+    {"id":"opaque_unlinked","username":"alice","alias":"moonwalker77"}
+  ]
+}

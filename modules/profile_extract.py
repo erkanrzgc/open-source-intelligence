@@ -18,6 +18,8 @@ import logging
 import re
 from typing import Any
 
+from bs4 import BeautifulSoup
+
 log = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency guard
@@ -169,6 +171,7 @@ def extract_profile(html: str) -> dict[str, Any]:
 
     data: dict[str, Any] = {}
     social_handles: dict[str, str] = {}
+    mentioned_social_handles: dict[str, str] = {}
     links: set[str] = set()
     emails: set[str] = set()
 
@@ -176,7 +179,8 @@ def extract_profile(html: str) -> dict[str, Any]:
     for match in _JSON_LD_RE.finditer(html):
         try:
             ld_raw = json.loads(match.group(1).strip())
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
+            log.debug("Ignoring malformed profile JSON-LD")
             continue
 
         items = ld_raw if isinstance(ld_raw, list) else [ld_raw]
@@ -187,7 +191,10 @@ def extract_profile(html: str) -> dict[str, Any]:
             if not isinstance(item, dict):
                 continue
             item_type = str(item.get("@type", ""))
-            if any(t in item_type for t in ["Person", "ProfilePage", "Organization", "Author"]):
+            if "ProfilePage" in item_type and isinstance(item.get("mainEntity"), dict):
+                item = item["mainEntity"]
+                item_type = str(item.get("@type", ""))
+            if item_type == "Person":
                 if item.get("name") and not data.get("name"):
                     data["name"] = str(item["name"]).strip()
                 if item.get("alternateName") and not data.get("username"):
@@ -259,8 +266,8 @@ def extract_profile(html: str) -> dict[str, Any]:
                     data["location"] = str(user_obj["location"]).strip()
                 if user_obj.get("email"):
                     emails.add(str(user_obj["email"]).strip())
-        except Exception:
-            pass
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            log.debug("Ignoring malformed profile hydration state")
 
     # 3. OpenGraph & Meta tags (Fill in anything not yet discovered)
     meta_tags: dict[str, str] = {}
@@ -300,9 +307,12 @@ def extract_profile(html: str) -> dict[str, Any]:
             if cleaned_user:
                 data["username"] = cleaned_user
 
-    # 4. Outbound Links (<a> tags)
-    for match in _A_HREF_RE.finditer(html):
-        href = match.group(1).strip()
+    # 4. Only explicit self-links are identity evidence. Footer/navigation
+    # links may describe the platform owner or another user, not this profile.
+    for anchor in BeautifulSoup(html, "html.parser").find_all("a", href=True):
+        if "me" not in (anchor.get("rel") or ()):
+            continue
+        href = str(anchor["href"]).strip()
         mailto = _MAILTO_RE.search(href)
         if mailto:
             emails.add(mailto.group(1))
@@ -322,7 +332,7 @@ def extract_profile(html: str) -> dict[str, Any]:
                 for match in pat.finditer(bio_text):
                     h = match.group(1).lstrip("@").strip()
                     if h.lower() not in _GENERIC_PATHS:
-                        social_handles[srv] = h
+                        mentioned_social_handles[srv] = h
                         break
 
         for email_match in _EMAIL_REGEX.finditer(bio_text):
@@ -340,6 +350,10 @@ def extract_profile(html: str) -> dict[str, Any]:
         for srv, handle in social_handles.items():
             data[f"{srv}_username"] = handle
 
+    if mentioned_social_handles:
+        # A bio may mention a friend/employer; discovery is not ownership proof.
+        data["mentioned_social_handles"] = mentioned_social_handles
+
     if links:
         data["links"] = sorted(links)[:10]
         if not data.get("website_url"):
@@ -351,6 +365,8 @@ def extract_profile(html: str) -> dict[str, Any]:
             raw = _socid_extract(html)
             if isinstance(raw, dict):
                 for k, v in raw.items():
+                    if k in {"links", "website", "website_url", "social_handles", "socials"} or k.endswith("_username"):
+                        continue  # Unscoped extraction cannot establish self-links.
                     if v not in (None, "", [], {}) and k not in data:
                         data[k] = v
         except Exception as exc:

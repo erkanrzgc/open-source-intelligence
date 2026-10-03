@@ -11,6 +11,18 @@ from core.models import (
 from core.reporter import export_html
 
 
+def test_identity_commentary_is_advisory_and_escaped():
+    from core.reporter.html_export import _identity_analysis_block
+
+    rendered = _identity_analysis_block({"identity_analysis": {
+        "summary": "<script>unsafe</script>", "key_findings": ["<img onerror=boom>"],
+    }})
+    assert "advisory only" in rendered
+    assert "<script>" not in rendered
+    assert "<img" not in rendered
+    assert "&lt;script&gt;" in rendered
+
+
 def test_export_html_escapes_username_and_renders_sections(tmp_path):
     result = ScanResult(
         username="<script>alert(1)</script>",

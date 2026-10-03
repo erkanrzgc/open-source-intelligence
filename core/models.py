@@ -64,6 +64,7 @@ class PlatformResult:
     contract_revision: str = ""
     confirmation_capable: bool = False
     contract_verified: bool = False
+    checked_at: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +74,7 @@ class PlatformResult:
             "exists": self.exists,
             "status": self.status,
             "response_time": round(self.response_time, 3),
+            "http_status": self.http_status,
             "profile_data": self.profile_data,
             "rendered": self.rendered,
             "screenshot_path": self.screenshot_path,
@@ -94,6 +96,7 @@ class PlatformResult:
             "contract_revision": self.contract_revision,
             "confirmation_capable": self.confirmation_capable,
             "contract_verified": self.contract_verified,
+            "checked_at": self.checked_at,
         }
 
     @classmethod
@@ -127,6 +130,7 @@ class PlatformResult:
             contract_revision=str(data.get("contract_revision", "")),
             confirmation_capable=bool(data.get("confirmation_capable", False)),
             contract_verified=bool(data.get("contract_verified", False)),
+            checked_at=data.get("checked_at"),
         )
 
 
@@ -247,6 +251,7 @@ class ScanResult:
     enrichment: dict | None = None  # EnrichmentReport.to_dict() or None
     scan_time: float = 0.0
     ai_report: dict | None = None
+    identity_analysis: dict | None = None  # Advisory AI output; never an identity verdict.
     investigator_summary: dict | None = None
     diagnostics: dict = field(
         default_factory=lambda: {
@@ -443,6 +448,7 @@ class ScanResult:
             ],
             "enrichment": self.enrichment,
             "ai_report": self.ai_report,
+            "identity_analysis": self.identity_analysis,
             "investigator_summary": self.investigator_summary,
             "diagnostics": self.diagnostics,
         }
@@ -535,6 +541,7 @@ class ScanResult:
             enrichment=data.get("enrichment"),
             scan_time=float(data.get("scan_time", 0.0)),
             ai_report=data.get("ai_report"),
+            identity_analysis=data.get("identity_analysis"),
             investigator_summary=data.get("investigator_summary"),
             diagnostics=dict(
                 data.get("diagnostics")

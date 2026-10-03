@@ -18,7 +18,7 @@ from core.search import index_scan
 
 log = get_logger(__name__)
 
-SCAN_PAYLOAD_SCHEMA_VERSION = "2026-08-09"
+SCAN_PAYLOAD_SCHEMA_VERSION = "2026-10-01"
 _PLUGIN_REGISTRY: PluginRegistry | None = None
 
 

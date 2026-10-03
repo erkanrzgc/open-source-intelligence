@@ -1,10 +1,13 @@
 """Deterministic username-candidate generation and profile discoveries."""
 
+import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from utils.helpers import extract_emails_from_text, extract_urls_from_text
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -96,18 +99,18 @@ def expand_consonant_clusters(handle: str) -> set[str]:
         suffix = handle[end:]
         for v in ("i", "e", "a"):
             if len(cluster) == 4:
-                c1, c2, c3, c4 = cluster
+                c1, c2, c3, c4 = list(cluster)
                 results.add(f"{prefix}{c1}{v}{c2}{c3}{v}{c4}{suffix}")
                 results.add(f"{prefix}{c1}{v}{c2}{c3}{c4}{suffix}")
                 results.add(f"{prefix}{c1}{c2}{c3}{v}{c4}{suffix}")
             elif len(cluster) == 3:
-                c1, c2, c3 = cluster
+                c1, c2, c3 = list(cluster)
                 results.add(f"{prefix}{c1}{v}{c2}{v}{c3}{suffix}")
                 results.add(f"{prefix}{c1}{v}{c2}{c3}{suffix}")
                 results.add(f"{prefix}{c1}{c2}{v}{c3}{suffix}")
             elif len(cluster) == 5:
                 c0 = cluster[0]
-                c1, c2, c3, c4 = cluster[1:]
+                c1, c2, c3, c4 = list(cluster[1:])
                 results.add(f"{prefix}{c0}{c1}{v}{c2}{c3}{v}{c4}{suffix}")
                 results.add(f"{prefix}{c0}{c1}{v}{c2}{c3}{c4}{suffix}")
                 results.add(f"{prefix}{c0}{c1}{c2}{c3}{v}{c4}{suffix}")
@@ -154,8 +157,8 @@ def generate_candidates(
                 from modules.recon.handle_generator import generate as generate_name_handles
                 for cand in generate_name_handles(name.strip(), max_candidates=10):
                     add(cand.handle, "discovered_name")
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("name-based alias generation failed (%s)", type(exc).__name__)
 
     for expanded in expand_consonant_clusters(root):
         add(expanded, "vowel_expansion")
@@ -284,6 +287,11 @@ def extract_discoverable_data(profile_data: dict) -> dict:
     social_handles = profile_data.get("social_handles") or profile_data.get("socials")
     if isinstance(social_handles, dict):
         for val in social_handles.values():
+            if isinstance(val, str) and val.strip():
+                linked_usernames.add(val.strip().lstrip("@"))
+    mentions = profile_data.get("mentioned_social_handles")
+    if isinstance(mentions, dict):
+        for val in mentions.values():
             if isinstance(val, str) and val.strip():
                 linked_usernames.add(val.strip().lstrip("@"))
 

@@ -102,6 +102,7 @@ class ProviderObservation:
             evidence_class=self.evidence_class,
             entity_scope=self.entity_scope,
             contract_revision=self.contract_revision,
+            checked_at=self.checked_at.isoformat(),
             confirmation_capable=platform.evidence_class
             in {"official_exact", "official_scoped", "public_contract"},
             contract_verified=bool(

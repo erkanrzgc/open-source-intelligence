@@ -31,13 +31,24 @@ jobs:
         run: ruff check core modules utils scripts tests mcp_server.py
 
       - name: Mypy
-        run: mypy --python-version "${{ matrix.python-version }}" --ignore-missing-imports core modules utils scripts/provider_contract_smoke.py
+        run: mypy --python-version "${{ matrix.python-version }}" --ignore-missing-imports core modules utils scripts/provider_contract_smoke.py scripts/identity_benchmark.py
 
       - name: Bandit
-        run: bandit -r core modules utils mcp_server.py scripts/provider_contract_smoke.py -q
+        run: bandit -r core modules utils mcp_server.py scripts/provider_contract_smoke.py scripts/identity_benchmark.py -q
 
       - name: Pytest
         run: pytest --timeout=30 --cov=core --cov=modules --cov=utils --cov-report=term-missing
+
+      - name: Offline labelled identity regression
+        run: python -m scripts.identity_benchmark --check --output reports/identity-benchmark.json
+
+      - name: Upload identity evaluation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: identity-benchmark-${{ matrix.python-version }}
+          path: reports/identity-benchmark.json
+          if-no-files-found: warn
 
       - name: Build and smoke-test wheel
         run: |
@@ -45,4 +56,29 @@ jobs:
           python -m build --wheel
           python -m venv /tmp/osint-wheel-smoke
           /tmp/osint-wheel-smoke/bin/pip install dist/*.whl
-          /tmp/osint-wheel-smoke/bin/python -c "from pathlib import Path; from core.analysis.skill_loader import load_skill; from core.platform_loader import catalogue_summary; from modules.analysis import build_entity_graph; from modules.platforms import PLATFORMS; import modules.providers, scripts, web; summary = catalogue_summary(PLATFORMS); assert callable(build_entity_graph); assert len(PLATFORMS) == 500; assert summary['core_count'] == 100; assert summary['full_count'] == 500; assert load_skill('profile_validator').name == 'profile_validator'; assert load_skill('exec_summary').name == 'exec_summary'; assert (Path(modules.providers.__file__).parent / 'SKILL.md').is_file(); assert (Path(web.__file__).parent / 'index.html').is_file(); assert (Path(scripts.__file__).parent / 'maigret_data.json').is_file()"
+          cd /tmp
+          /tmp/osint-wheel-smoke/bin/python - <<'PY'
+          from pathlib import Path
+          from core.analysis.skill_loader import load_skill
+          from core.platform_loader import catalogue_summary
+          from modules.analysis import build_entity_graph
+          from modules.platforms import PLATFORMS
+          import core.investigation
+          import modules.providers
+          import scripts
+          import web
+
+          summary = catalogue_summary(PLATFORMS)
+          assert callable(build_entity_graph)
+          assert callable(core.investigation.load_workbench)
+          assert len(PLATFORMS) == summary['full_count'] == 500
+          assert summary['core_count'] == 100
+          assert load_skill('profile_validator').name == 'profile_validator'
+          assert load_skill('exec_summary').name == 'exec_summary'
+          for package in (modules.providers, core.investigation):
+              assert (Path(package.__file__).parent / 'SKILL.md').is_file()
+          for asset in ('index.html', 'workbench.js'):
+              assert (Path(web.__file__).parent / asset).is_file()
+          for asset in ('maigret_data.json', 'fixtures/identity_benchmark.json'):
+              assert (Path(scripts.__file__).parent / asset).is_file()
+          PY

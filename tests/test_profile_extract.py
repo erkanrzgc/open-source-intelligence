@@ -85,7 +85,7 @@ def test_extract_opengraph_and_outbound_links():
     </head>
     <body>
         <a rel="me" href="https://github.com/jsmith-dev">GitHub</a>
-        <a href="https://www.linkedin.com/in/john-smith-dev/">LinkedIn</a>
+        <a rel="me" href="https://www.linkedin.com/in/john-smith-dev/">LinkedIn</a>
     </body>
     </html>
     """
@@ -95,7 +95,8 @@ def test_extract_opengraph_and_outbound_links():
     assert res["avatar_url"] == "https://example.com/pic.png"
     assert res["github_username"] == "jsmith-dev"
     assert res["linkedin_username"] == "john-smith-dev"
-    assert res["telegram_username"] == "jsmith_dev"
+    assert res["mentioned_social_handles"]["telegram"] == "jsmith_dev"
+    assert "telegram_username" not in res
     assert res["email"] == "test@domain.org"
 
 
@@ -128,3 +129,37 @@ def test_extract_next_data_hydration():
     assert res["avatar_url"] == "https://example.com/bob.jpg"
     assert res["email"] == "bob@builder.com"
 
+
+def test_footer_links_cannot_become_identity_evidence(monkeypatch):
+    monkeypatch.setattr(profile_extract, "_socid_extract", None)
+    result = profile_extract.extract_profile('''
+        <meta property="profile:username" content="alice">
+        <footer><a href="https://github.com/site-owner">Our GitHub</a>
+        <a href="https://company.example">Company</a></footer>
+    ''')
+    assert "github_username" not in result
+    assert "links" not in result
+    assert "website_url" not in result
+
+
+def test_organization_jsonld_is_not_profile_identity(monkeypatch):
+    monkeypatch.setattr(profile_extract, "_socid_extract", None)
+    result = profile_extract.extract_profile('''
+      <script type="application/ld+json">{"@type":"Organization",
+      "name":"Hosting Company","sameAs":["https://github.com/site-owner"]}</script>
+    ''')
+    assert result == {}
+
+
+def test_bio_mentions_are_discovery_only_not_direct_identity_links(monkeypatch):
+    from core.correlation import has_direct_profile_link
+    from core.smart_search import extract_discoverable_data
+
+    monkeypatch.setattr(profile_extract, "_socid_extract", None)
+    profile = profile_extract.extract_profile('''
+      <meta property="og:description" content="Thanks to https://github.com/alice for mentoring me">
+    ''')
+    assert "alice" in extract_discoverable_data(profile)["linked_usernames"]
+    source = {"platforms": [{"exists": True, "verification": {"verdict": "confirmed"}, "profile_data": profile}]}
+    target = {"username": "alice", "platforms": [{"platform": "GitHub", "exists": True, "verification": {"verdict": "confirmed"}}]}
+    assert not has_direct_profile_link(source, target)

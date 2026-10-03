@@ -42,6 +42,10 @@ from modules.stealth.tor_control import CircuitRotator
 log = get_logger(__name__)
 
 
+class RequestBudgetExceeded(RuntimeError):
+    """No further HTTP attempts are authorized for this client."""
+
+
 def _safe_log_url(url: str) -> str:
     """Strip query/fragment data so API keys and tokens cannot enter logs."""
     parsed = urlparse(url)
@@ -266,7 +270,12 @@ class HTTPClient:
         tor_control_password: str | None = None,
         verify_tls: bool | None = None,
         allow_private_networks: bool = False,
+        max_requests: int | None = None,
     ) -> None:
+        if max_requests is not None and max_requests < 1:
+            raise ValueError("max_requests must be positive")
+        self._max_requests = max_requests
+        self.budget_exhausted = False
         if tor:
             self.proxies = ["socks5://127.0.0.1:9050"]
         elif proxies:
@@ -343,6 +352,13 @@ class HTTPClient:
     def request_count(self) -> int:
         """Number of wire attempts made by this client, including retries."""
         return self._request_count
+
+    def _reserve_request(self) -> None:
+        # No await between check and increment: concurrent tasks share one cap.
+        if self._max_requests is not None and self._request_count >= self._max_requests:
+            self.budget_exhausted = True
+            raise RequestBudgetExceeded("HTTP request budget exhausted")
+        self._request_count += 1
 
     def _next_http_proxy(self) -> str | None:
         """Return the next healthy HTTP/HTTPS proxy; SOCKS handled at connector level."""
@@ -432,7 +448,7 @@ class HTTPClient:
         )
         # When aiohttp gets blocked (403 / empty body / CF challenge),
         # retry via Scrapling's stealthier TLS transport.
-        if _should_retry_scrapling(status, body, url):
+        if self._max_requests is None and _should_retry_scrapling(status, body, url):
             sr = await _try_scrapling_get(url, headers, self._request_timeout)
             if sr is not None:
                 return sr[0], sr[1], sr[2]
@@ -469,11 +485,11 @@ class HTTPClient:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
-                    self._request_count += 1
+                    self._reserve_request()
                     async with session.get(
                         url,
                         headers=merged,
-                        allow_redirects=allow_redirects,
+                        allow_redirects=allow_redirects and self._max_requests is None,
                         proxy=proxy,
                     ) as resp:
                         elapsed = time.monotonic() - start
@@ -523,10 +539,11 @@ class HTTPClient:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
-                    self._request_count += 1
+                    self._reserve_request()
                     async with session.get(
                         url,
                         headers=merged,
+                        allow_redirects=self._max_requests is None,
                         proxy=proxy,
                     ) as resp:
                         elapsed = time.monotonic() - start
@@ -604,10 +621,11 @@ class HTTPClient:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
-                    self._request_count += 1
+                    self._reserve_request()
                     async with session.post(
                         url,
                         json=json_body,
+                        allow_redirects=self._max_requests is None,
                         headers=merged,
                         proxy=proxy,
                     ) as resp:
@@ -687,9 +705,10 @@ class HTTPClient:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
-                    self._request_count += 1
+                    self._reserve_request()
                     async with session.post(
                         url,
+                        allow_redirects=self._max_requests is None,
                         data=form_body,
                         headers=merged,
                         proxy=proxy,
@@ -738,9 +757,10 @@ class HTTPClient:
                 start = time.monotonic()
                 proxy = self._next_http_proxy()
                 try:
-                    self._request_count += 1
+                    self._reserve_request()
                     async with session.get(
                         url,
+                        allow_redirects=self._max_requests is None,
                         headers=merged,
                         proxy=proxy,
                     ) as resp:

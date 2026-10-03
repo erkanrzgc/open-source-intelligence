@@ -161,6 +161,22 @@ function renderInvestigatorSummary(payload) {
     phaseWarnings.appendChild(item);
   }
   renderIdentityCandidates((payload && payload.identity_candidates) || []);
+  let analysisPanel = document.getElementById("identity-analysis");
+  if (!analysisPanel) {
+    analysisPanel = document.createElement("details");
+    analysisPanel.id = "identity-analysis";
+    investigatorSummary.appendChild(analysisPanel);
+  }
+  analysisPanel.replaceChildren();
+  const analysis = payload && payload.identity_analysis;
+  analysisPanel.hidden = !analysis;
+  if (analysis) {
+    const title = document.createElement("summary");
+    title.textContent = "AI identity commentary — advisory, not a verdict";
+    const body = document.createElement("p");
+    body.textContent = analysis.summary || "";
+    analysisPanel.append(title, body);
+  }
   const brief = payload && payload.investigator_summary;
   if (!brief) {
     investigatorSummary.classList.remove("show");
@@ -219,18 +235,29 @@ function updateExportLinks(payload) {
   panel.style.display = "block";
   const scanId = payload.scan_id;
   const baseUrl = scanId ? `/export/scan/${encodeURIComponent(scanId)}` : `/export/${encodeURIComponent(username)}/latest`;
-  const token = localStorage.getItem("osint_token");
-  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
-
-  const htmlLink = document.getElementById("export-html");
-  const jsonLink = document.getElementById("export-json");
-  const csvLink = document.getElementById("export-csv");
-  const stixLink = document.getElementById("export-stix");
-
-  if (htmlLink) htmlLink.href = `${baseUrl}?format=html${tokenParam}`;
-  if (jsonLink) jsonLink.href = `${baseUrl}?format=json${tokenParam}`;
-  if (csvLink) csvLink.href = `${baseUrl}?format=csv${tokenParam}`;
-  if (stixLink) stixLink.href = `${baseUrl}?format=stix${tokenParam}`;
+  for (const format of ["html", "json", "csv", "stix"]) {
+    const link = document.getElementById(`export-${format}`);
+    if (!link) continue;
+    link.href = `${baseUrl}?format=${format}`;
+    link.onclick = async (event) => {
+      event.preventDefault();
+      try {
+        const token = localStorage.getItem("osint_token");
+        const response = await fetch(link.href, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) throw new Error(`Export failed (${response.status})`);
+        const url = URL.createObjectURL(await response.blob());
+        const download = document.createElement("a");
+        download.href = url;
+        download.download = `${username}.${format === "stix" ? "json" : format}`;
+        download.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (error) {
+        window.alert(error.message);
+      }
+    };
+  }
 }
 
 function renderIdentityCandidates(candidates) {
@@ -939,6 +966,7 @@ async function loadCaseDetail(caseId) {
       return;
     }
     const c = await res.json();
+    if (activeCaseId !== caseId) return;
     caseDetail.innerHTML = "";
     const title = document.createElement("h3");
     title.textContent = "#" + c.id + "  " + c.name + "  (" + c.status + ")";
@@ -979,6 +1007,9 @@ async function loadCaseDetail(caseId) {
       });
     actions.appendChild(delBtn);
     caseDetail.appendChild(actions);
+    const workbench = document.createElement("div");
+    caseDetail.appendChild(workbench);
+    if (window.renderCaseWorkbench) window.renderCaseWorkbench(caseId, workbench);
 
     // Notes
     const notesH = document.createElement("h4");

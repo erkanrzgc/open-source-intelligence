@@ -31,6 +31,9 @@ Guidelines:
 3. Extract `primary_locations` and `primary_occupations` based strictly on verified overlaps.
 4. If contradictory profiles exist (e.g., a Russian crypto bot vs. a Turkish software engineer), identify the primary target identity and place the conflicting platform in `divergent_profiles`.
 5. NEVER fabricate or hallucinate details not provided in the input.
+6. Your output is advisory only. `deterministic_verdict` is authoritative;
+   an uncertain alias must remain uncertain regardless of your model confidence.
+   Profile existence does not establish that its owner is the target person.
 
 Example input:
 ```json

@@ -24,6 +24,8 @@ core/
 ├── http_client.py          # async HTTP with retry, proxy, rate limit
 ├── platform_loader.py      # deterministic 100-core / 500-full catalogue
 ├── cross_reference.py      # name/location/linked-account identity scoring
+├── correlation.py          # conservative alias evidence and platform-scoped links
+├── evaluation/             # labelled offline metrics (see evaluation/SKILL.md)
 ├── smart_search.py         # ranked alias candidate generator
 ├── plugins.py              # third-party plugin loader
 ├── progress.py             # event emitter for live UI
@@ -32,6 +34,7 @@ core/
 ├── analysis/               # LLM analyzer + skill registry
 ├── history.py              # SQLite scan history
 ├── cases.py                # case management
+├── investigation/         # case graph, timeline, explicit bounded pivots (SKILL.md)
 ├── watchlist.py            # watchlist persistence
 ├── scheduler.py            # periodic scan + notification
 ├── geo.py                  # Nominatim geocoding
@@ -58,6 +61,12 @@ Adding a new scan-time setting means:
    expose it through MCP when required.
 3. The engine reads `cfg.<your_field>` — never `os.environ`.
 
+`platform_names` restricts root/alias platform probes within the selected
+catalogue scope. `http_request_budget` bounds central HTTP attempts including
+retries; capped clients disable redirects and secondary TLS fallback. It is
+not a global quota for independent optional modules. Case pivots use a fixed
+public-provider allowlist and disable those other modules (see investigation/SKILL.md).
+
 Environment overrides live in `core/config.py` constants
 (`MAX_CONCURRENT`, `REQUEST_TIMEOUT`, …). The relevant env names are
 listed in the root `AGENTS.md`.
@@ -74,6 +83,11 @@ of `result.to_dict()`. New result fields require:
 
 Alias profiles are never appended to root `platforms`; they live under
 `identity_candidates` with deterministic verdict, score and evidence.
+`identity_analysis` stores opt-in AI commentary separately from deterministic
+`investigator_summary` and survives report/history round trips. It cannot
+upgrade candidate verdicts. Observations retain `checked_at`, HTTP status,
+profile URL, contract revision and verification reasons; legacy timestamps
+remain null rather than being invented.
 
 Supported official endpoints are implemented under `modules/providers/`.
 `ScanContext.create()` loads provider credentials once; secrets never enter

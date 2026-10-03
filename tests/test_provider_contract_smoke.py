@@ -53,6 +53,9 @@ async def test_public_contract_matrix_checks_positive_and_negative_profiles():
     }
     assert len(client.calls) == 4
     assert "api-key" not in json.dumps(report).casefold()
+    observation = report["providers"][0]["positive"]
+    assert observation["profile_url"] == "https://github.com/octocat"
+    assert observation["checked_at"]
 
 
 @pytest.mark.asyncio
@@ -215,3 +218,14 @@ async def test_extended_public_providers_smoke_matrix():
     assert report["summary"]["passed"] == 4
     assert report["summary"]["failed"] == 0
 
+
+@pytest.mark.asyncio
+async def test_required_provider_cannot_be_silently_excluded_by_selection():
+    client = _StubClient(lambda url: (200, {"login": "octocat"}) if url.endswith("octocat") else (404, None))
+    report = await run_provider_contract_smoke(
+        client, ProviderCredentials(), provider_names=["GitHub"],
+        required_providers=["X"], nonce="abc12345",
+    )
+    assert report["success"] is False
+    assert report["summary"]["selected"] == 2
+    assert report["providers"][1]["failures"] == ["required_provider_unconfigured"]

@@ -264,3 +264,12 @@ def test_search_scans_semantic(db: Path):
     assert results[0]["similarity_score"] > 0.20
 
 
+def test_list_recent_all_and_filter_before_limit(db: Path):
+    save_scan(_payload("alice_dev", []), ts=1000, db_path=db)
+    for i in range(105):
+        save_scan(_payload(f"new_user_{i}", []), ts=2000 + i, db_path=db)
+    assert list_scans(limit=1, db_path=db)[0].username == "new_user_104"
+    assert list_scans(username_contains="ALICE", limit=1, db_path=db)[0].username == "alice_dev"
+    assert list_scans("alice", db_path=db) == []  # Existing exact semantics.
+    assert list_scans(limit=-1, db_path=db) == []
+

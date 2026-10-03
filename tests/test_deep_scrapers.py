@@ -6,25 +6,25 @@ from aioresponses import aioresponses
 from core.http_client import HTTPClient
 from modules.deep_scrapers import (
     DEEP_SCRAPERS,
+    scrape_bluesky,
     scrape_chess_com,
     scrape_devto,
     scrape_github,
     scrape_gitlab,
+    scrape_gravatar,
     scrape_hackernews,
     scrape_hugging_face,
     scrape_keybase,
     scrape_lichess,
+    scrape_mastodon,
     scrape_medium,
     scrape_npm,
     scrape_reddit,
     scrape_steam,
+    scrape_telegram,
     scrape_tiktok,
     scrape_twitter,
     scrape_youtube,
-    scrape_bluesky,
-    scrape_telegram,
-    scrape_gravatar,
-    scrape_mastodon,
 )
 
 

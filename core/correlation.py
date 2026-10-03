@@ -590,18 +590,15 @@ def _social_handles(payload: dict) -> set[str]:
 
 
 def _identity_avatars(payload: dict) -> set[str]:
-    values = _identity_strings(
-        payload,
-        ("avatar", "avatar_url", "profile_picture", "profile_pic", "picture", "icon_img"),
-    )
-    return {
-        value.strip().casefold()
-        for value in values
-        if not any(
-            marker in value.casefold()
-            for marker in ("default", "placeholder", "identicon", "blank-avatar")
-        )
-    }
+    """Only explicit non-default perceptual hashes count, never shared image URLs."""
+    hashes: set[str] = set()
+    for profile in _profile_dicts(payload):
+        value = profile.get("avatar_phash")
+        if profile.get("avatar_is_default") is False and isinstance(value, str):
+            value = value.strip().casefold()
+            if re.fullmatch(r"[0-9a-f]{16}", value) and len(set(value)) > 1:
+                hashes.add(value)
+    return hashes
 
 
 def _identity_names(payload: dict) -> set[str]:
@@ -696,12 +693,44 @@ def _identity_verdict(score: float, signals: list[MatchSignal]) -> str:
     if kinds & {"direct_profile_link", "verified_email", "verified_phone"}:
         return "confirmed_same"
     non_handle = kinds - {"handle_similarity"}
+    # URL and handle representations of the same external account are not
+    # independent evidence (extractors commonly emit both).
+    if non_handle & {"external_url", "social_handle"}:
+        non_handle -= {"external_url", "social_handle"}
+        non_handle.add("external_identity")
     strong = any(signal.weight >= 0.75 for signal in signals)
     if score >= 0.70 and len(non_handle) >= 2 and strong:
         return "likely_same"
     if score >= 0.35 and non_handle:
         return "possible_same"
     return "uncertain"
+
+
+def has_direct_profile_link(source: dict, target: dict) -> bool:
+    """Require a link to an observed account, including its platform namespace.
+
+    A GitHub handle named 'alice' cannot confirm a Hugging Face account named
+    'alice'. Candidate-generation reasons and unconfirmed URLs are not proof.
+    """
+    def confirmed_rows(payload: dict) -> list[dict]:
+        return [row for row in payload.get("platforms", []) if isinstance(row, dict)
+                and row.get("exists")
+                and (row.get("verification") or {}).get("verdict") == "confirmed"]
+
+    source_profiles = {"platforms": confirmed_rows(source)}
+    links = _external_urls(source_profiles)
+    handles = _social_handles(source_profiles)
+    namespaces = {"x": "twitter", "dev.to": "devto", "hugging face": "huggingface"}
+    for row in confirmed_rows(target):
+        url = row.get("url")
+        if isinstance(url, str) and _normal_url(url) in links:
+            return True
+        service = str(row.get("platform", "")).casefold()
+        service = namespaces.get(service, service)
+        username = row.get("canonical_username") or row.get("queried_username") or target.get("username")
+        if isinstance(username, str) and f"{service}:{username.casefold()}" in handles:
+            return True
+    return False
 
 
 def correlate_identity(
@@ -764,7 +793,7 @@ def correlate_identity(
     signals.extend(
         _match_exact_set(
             _identity_avatars(a), _identity_avatars(b), "avatar",
-            IDENTITY_WEIGHT_AVATAR, "shared non-default avatar",
+            IDENTITY_WEIGHT_AVATAR, "shared non-default avatar perceptual hash",
         )[:1]
     )
     signals.extend(_identity_name_signals(a, b))
@@ -792,7 +821,17 @@ def correlate_identity(
             )
         )
 
-    score = _combine(signals)
+    # A URL and a social handle commonly encode the same account. Retain both
+    # as evidence but count that evidence family at most once in the score.
+    weighted_signals: list[MatchSignal] = []
+    external_seen = False
+    for signal in signals:
+        if signal.kind in {"external_url", "social_handle"}:
+            if external_seen:
+                continue
+            external_seen = True
+        weighted_signals.append(signal)
+    score = _combine(weighted_signals)
     return CorrelationResult(
         username_a=username_a,
         username_b=username_b,

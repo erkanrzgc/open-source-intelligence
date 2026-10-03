@@ -45,7 +45,7 @@ by `core/engine.py`:
 | `toutatis_lookup.py` | Instagram OSINT lookup |
 | `whois_lookup.py` | WHOIS for username-as-domain |
 | `photo_compare.py` | Perceptual-hash avatar comparison |
-| `profile_extract.py` | socid_extractor wrapper |
+| `profile_extract.py` | Universal metadata parser; self-links require Person sameAs or rel=me; bio mentions are discovery only |
 | `profile_liveness.py` | Active-profile scoring (avatar/bio/og/jsonld) |
 | `fp_filter.py` | False-positive confidence scoring |
 | `deep_scrapers.py` | Hand-curated deep-profile scrapers, including Hugging Face public user APIs |

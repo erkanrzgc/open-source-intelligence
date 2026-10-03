@@ -336,8 +336,8 @@ async def test_adaptive_alias_fallback_is_capped_at_240_probes(monkeypatch) -> N
 async def test_strong_primary_alias_stops_before_adaptive_fallback(monkeypatch) -> None:
     platforms = [platform for platform in load_platforms() if platform.alias_probe]
     root_profile = PlatformResult(
-        platform="Hugging Face",
-        url="https://huggingface.co/erkanrzgc",
+        platform="GitHub",
+        url="https://github.com/erkanrzgc",
         category="dev",
         exists=True,
         status="found",
@@ -388,6 +388,26 @@ async def test_strong_primary_alias_stops_before_adaptive_fallback(monkeypatch) 
     assert len(result.variations_checked) == 12
     assert result.identity_candidates[0].username == "erkanrzgcc"
     assert result.identity_candidates[0].verdict == "confirmed_same"
+
+
+@pytest.mark.parametrize("root_platform, expected", [("GitHub", "confirmed_same"), ("Hugging Face", "uncertain")])
+def test_direct_link_requires_the_observed_platform_namespace(root_platform, expected):
+    root = PlatformResult(
+        platform=root_platform, url="https://example.test/alice", category="dev",
+        exists=True, verification={"verdict": "confirmed"},
+    )
+    alias = PlatformResult(
+        platform="Hugging Face", url="https://huggingface.co/alicee", category="dev",
+        exists=True, verification={"verdict": "confirmed"},
+        profile_data={"github_username": "alice"},
+    )
+    result = engine_mod._resolve_alias_candidates(
+        cfg=ScanConfig(username="alice"),
+        root_payload=ScanResult(username="alice", platforms=[root]).to_dict(),
+        candidates=generate_candidates("alice", max_candidates=1),
+        confirmed_by_username={"alicee": [alias]},
+    )
+    assert result[0].verdict == expected
 
 
 async def _empty_profile() -> dict:

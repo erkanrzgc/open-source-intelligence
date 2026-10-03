@@ -2,7 +2,6 @@
 
 from core.semantic_matcher import (
     compute_semantic_similarity,
-    extract_features,
     match_bios,
 )
 

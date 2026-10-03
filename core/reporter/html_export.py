@@ -49,13 +49,15 @@ def _platforms_table(data: dict) -> str:
                 <td><a href="{escape(p['url'])}" target="_blank" rel="noreferrer noopener">{escape(p['url'])}</a></td>
                 <td>{escape(str(p['response_time']))}s</td>
                 <td>{escape(str(p['status']))}</td>
+                <td>{_fmt(p.get('checked_at'))}</td>
+                <td>{_fmt((p.get('verification') or {}).get('reason_codes', []))}</td>
             </tr>"""
         for index, p in enumerate((pf for pf in data["platforms"] if pf["exists"]), 1)
     )
     return f"""
     <h2>Profiles Found</h2>
     <table>
-        <tr><th>#</th><th>Platform</th><th>Category</th><th>URL</th><th>Response</th><th>Status</th></tr>
+        <tr><th>#</th><th>Platform</th><th>Category</th><th>URL</th><th>Response</th><th>Status</th><th>Checked at (UTC)</th><th>Evidence reasons</th></tr>
         {rows}
     </table>"""
 
@@ -87,7 +89,7 @@ def _identity_candidates_block(data: dict) -> str:
         f"""
         <tr>
             <td>{escape(str(candidate.get('username', '')))}</td>
-            <td>{_fmt([profile.get('platform', '') for profile in candidate.get('profiles', [])])}</td>
+            <td>{_fmt([str(profile.get('platform', '')) + ': ' + str(profile.get('url', '')) + ' (checked: ' + str(profile.get('checked_at') or 'unknown') + ')' for profile in candidate.get('profiles', [])])}</td>
             <td>{escape(str(candidate.get('verdict', 'uncertain')))}</td>
             <td>{escape(str(candidate.get('score', 0)))}</td>
             <td>{_fmt([item.get('detail', '') for item in candidate.get('evidence', [])])}</td>
@@ -576,6 +578,7 @@ def render_html(data: dict) -> str:
     </div>
 
     {_investigator_brief_block(data)}
+    {_identity_analysis_block(data)}
     {_platforms_table(data)}
     {_identity_candidates_block(data)}
 
@@ -599,6 +602,18 @@ def render_html(data: dict) -> str:
     {_variations_block(data)}
 </body>
 </html>"""
+
+
+def _identity_analysis_block(data: dict) -> str:
+    analysis = data.get("identity_analysis")
+    if not isinstance(analysis, dict):
+        return ""
+    return (
+        "<h2>AI identity commentary (advisory only)</h2>"
+        "<p>Does not change deterministic identity verdicts.</p>"
+        f"<p>{_fmt(analysis.get('summary'))}</p>"
+        f"<p>{_fmt(analysis.get('key_findings', []))}</p>"
+    )
 
 
 def export_html(result: ScanResult, filepath: str) -> None:

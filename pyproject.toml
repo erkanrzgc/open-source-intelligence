@@ -101,7 +101,9 @@ version = { attr = "core.version.__version__" }
 modules = ["platforms.yaml"]
 "modules.providers" = ["SKILL.md"]
 core = ["analysis/skills/*.md"]
-scripts = ["maigret_data.json"]
+"core.evaluation" = ["SKILL.md"]
+"core.investigation" = ["SKILL.md"]
+scripts = ["maigret_data.json", "fixtures/*.json"]
 web = ["*.html", "*.css", "*.js"]
 
 [tool.ruff]

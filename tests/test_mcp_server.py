@@ -29,6 +29,7 @@ async def test_tools_list():
     assert properties["alias_max_candidates"]["maximum"] == 24
     assert properties["alias_max_candidates"]["default"] == 24
     assert properties["alias_platform_limit"]["maximum"] == 15
+    assert properties["ai_correlate"]["default"] is False
 
 
 @pytest.mark.asyncio
@@ -426,4 +427,3 @@ async def test_tools_call_export_scan(tmp_path, monkeypatch):
     assert resp is not None
     assert out_file.is_file()
     assert "eve" in out_file.read_text(encoding="utf-8")
-

@@ -62,11 +62,14 @@ TOOLS = [
                     "type": "integer", "minimum": 1, "maximum": 24, "default": 24,
                     "description": "Adaptive alias cap; candidates 13-24 use five sites",
                 },
+                "platform_names": {"type": "array", "items": {"type": "string"}},
+                "http_request_budget": {"type": "integer", "minimum": 1, "maximum": 10000},
                 "alias_platform_limit": {
                     "type": "integer", "minimum": 1, "maximum": 15, "default": 15,
                 },
                 "ai_skills": {"type": "boolean", "default": False},
                 "ai_report": {"type": "boolean", "default": False},
+                "ai_correlate": {"type": "boolean", "default": False},
                 "allow_private_networks": {"type": "boolean", "default": False},
             },
             "required": ["username"],
@@ -115,6 +118,11 @@ TOOLS = [
             "type": "object",
             "properties": {},
         },
+    },
+    {
+        "name": "get_case_workbench",
+        "description": "Read a case-scoped evidence graph, snapshot timeline and proposed leads. Does not execute scans.",
+        "inputSchema": {"type": "object", "properties": {"case_id": {"type": "integer", "minimum": 1}}, "required": ["case_id"]},
     },
     {
         "name": "redteam_recon",
@@ -263,10 +271,13 @@ async def _scan(args: dict) -> dict:
         subdomain=False,
         categories=cat_tuple,
         platform_scope=str(args.get("platform_scope", "core")),
+        platform_names=tuple(args.get("platform_names", [])),
+        http_request_budget=args.get("http_request_budget"),
         alias_max_candidates=int(args.get("alias_max_candidates", 24)),
         alias_platform_limit=int(args.get("alias_platform_limit", 15)),
         ai_skills=bool(args.get("ai_skills", False)),
         ai_report=bool(args.get("ai_report", False)),
+        ai_correlate=bool(args.get("ai_correlate", False)),
         allow_private_networks=bool(args.get("allow_private_networks", False)),
     )
     result = await run_scan(cfg)
@@ -337,6 +348,15 @@ def _add_watchlist(args: dict) -> dict:
         notes=str(notes or ""),
     )
     return entry.to_dict()
+
+
+def _get_case_workbench(args: dict) -> dict:
+    from core.investigation import load_workbench
+
+    case_id = args.get("case_id")
+    if not isinstance(case_id, int) or isinstance(case_id, bool) or case_id < 1:
+        raise ValueError("case_id must be a positive integer")
+    return load_workbench(case_id)
 
 
 def _list_cases(_args: dict) -> dict:
@@ -592,6 +612,7 @@ async def _dispatch(request: dict) -> dict | None:
             "list_history": _list_history,
             "add_watchlist": _add_watchlist,
             "list_cases": _list_cases,
+            "get_case_workbench": _get_case_workbench,
             "redteam_recon": _redteam_recon,
             "scan_phone": _scan_phone,
             "scan_crypto": _scan_crypto,

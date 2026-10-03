@@ -100,3 +100,20 @@ def test_completion_runs_plugins_once_and_records_timing(monkeypatch):
     assert plugin_diag["status"] == "completed"
     assert plugin_diag["metrics"]["completed"] == 1
     assert plugin_diag["duration_ms"] >= 0
+
+
+def test_advisory_identity_analysis_survives_completion_and_history(tmp_path):
+    result = _result("alice")
+    result.identity_analysis = {"advisory_only": True, "summary": "AI commentary"}
+    db = tmp_path / "history.sqlite3"
+    completed = complete_scan_result(
+        result, ScanConfig(username="alice"), save_history=True, history_db=db,
+        watchlist_db=tmp_path / "watch.sqlite3",
+    )
+    assert completed.payload["identity_analysis"] == result.identity_analysis
+    assert "priority_score" in completed.payload["investigator_summary"]
+    saved = history.get_scan(completed.scan_id, db_path=db)
+    assert saved is not None
+    restored = ScanResult.from_dict(saved.payload)
+    assert restored.identity_analysis == result.identity_analysis
+    assert ScanResult.from_dict({"username": "legacy"}).identity_analysis is None

@@ -74,6 +74,8 @@ class ScanConfig:
     tor: bool = False
     categories: tuple[str, ...] | None = None
     platform_scope: str = "core"
+    platform_names: tuple[str, ...] = ()
+    http_request_budget: int | None = None
     alias_max_candidates: int = 24
     alias_platform_limit: int = 15
     request_timeout: int = REQUEST_TIMEOUT
@@ -122,6 +124,11 @@ class ScanConfig:
             raise ValueError("ai_skill_budget must be non-negative")
         if self.platform_scope not in ("core", "full"):
             raise ValueError("platform_scope must be 'core' or 'full'")
+        if self.http_request_budget is not None and not 1 <= self.http_request_budget <= 10000:
+            raise ValueError("http_request_budget must be between 1 and 10000")
+        if any(not isinstance(name, str) or not name.strip() for name in self.platform_names):
+            raise ValueError("platform_names must contain non-empty platform names")
+        object.__setattr__(self, "platform_names", tuple(dict.fromkeys(name.strip() for name in self.platform_names)))
         if not 1 <= self.alias_max_candidates <= 24:
             raise ValueError("alias_max_candidates must be between 1 and 24")
         if not 1 <= self.alias_platform_limit <= 15:

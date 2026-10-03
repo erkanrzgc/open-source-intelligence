@@ -803,6 +803,13 @@ def test_auth_me_rejects_invalid_token(client: TestClient) -> None:
     assert r.status_code == 401
 
 
+def test_query_string_token_does_not_authenticate(client: TestClient) -> None:
+    auth.create_user("query-user", "pw")
+    token = client.post("/auth/login", json={"username": "query-user", "password": "pw"}).json()["access_token"]
+    assert client.get("/auth/me", params={"token": token}).status_code == 401
+    assert client.get("/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
 def test_auth_gate_off_by_default(client: TestClient) -> None:
     # When OSINT_AUTH_REQUIRED is unset, every route is public as before.
     r = client.get("/watchlist")
@@ -992,5 +999,4 @@ def test_search_endpoint_semantic(client: TestClient) -> None:
     assert data["mode"] == "semantic"
     assert data["count"] >= 1
     assert any(h["username"] == "sec_analyst" for h in data["hits"])
-
 

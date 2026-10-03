@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python" alt="Python">
   <img src="https://img.shields.io/badge/platforms-100_core%20%7C%20500_full-purple?style=flat-square" alt="Platforms">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/tests-971%20passed-success?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-offline%20suite-blue?style=flat-square" alt="Offline test suite">
 </p>
 
 <p align="center">
@@ -169,6 +169,16 @@ curl -H 'Content-Type: application/json' \
 
 ## MCP server
 
+Cases now include an **Evidence workbench**: a provenance-preserving graph,
+snapshot timeline, separate analyst decisions and explicit, budgeted lead scans.
+Open a case after linking a saved scan. Reading a case never starts a scan.
+See [case workbench usage and limits](docs/case-workbench.md).
+
+```bash
+osint workbench 1  # read-only JSON; also available as MCP get_case_workbench
+osint scan alice --platform GitHub --no-smart --http-request-budget 8
+```
+
 ```bash
 python mcp_server.py
 ```
@@ -236,12 +246,26 @@ See `.env.example` for all options.
 
 ```bash
 pip install -e '.[dev,api]'
-pytest                                  # 971 offline tests
+pytest                                  # offline regression suite
 ruff check core modules utils scripts tests mcp_server.py
-mypy --ignore-missing-imports core modules utils scripts/provider_contract_smoke.py
+mypy --ignore-missing-imports core modules utils scripts/provider_contract_smoke.py scripts/identity_benchmark.py
+bandit -r core modules utils mcp_server.py scripts/provider_contract_smoke.py scripts/identity_benchmark.py -q
 ```
 
 Unit tests use no live network.
+
+The labelled identity regression report is also entirely offline:
+
+```bash
+python -m scripts.identity_benchmark --check --output reports/identity-benchmark.json
+```
+
+It reports strong-match precision/recall, abstentions, false positives and
+top-12/top-24 alias discovery. The bundled 24 identity pairs and 8 alias cases
+are **synthetic development fixtures**, not a representative field accuracy
+claim. Sparse same-person profiles count as misses at the strong-match threshold.
+The CI job stores this report as an artifact and fails on false strong matches.
+See [reliability assessment and investigation roadmap](docs/reliability-assessment.md).
 
 Live provider contracts are an explicit operational check, not part of the
 offline suite. Public providers always run; credential-gated providers run only

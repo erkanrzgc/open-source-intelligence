@@ -13,13 +13,14 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from core.config import ScanConfig
 from core.context import ScanContext
-from core.correlation import correlate_identity
+from core.correlation import correlate_identity, has_direct_profile_link
 from core.cross_reference import cross_reference
 from core.http_client import HTTPClient
 from core.logging_setup import get_logger
@@ -113,7 +114,7 @@ def _providers_requiring_token_prep(
         required.update(
             name
             for name in ALIAS_PROBE_PLATFORMS[: cfg.alias_platform_limit]
-            if name in {"Reddit", "Twitch"}
+            if name in {"Reddit", "Twitch"} and (not cfg.platform_names or name in cfg.platform_names)
         )
     return tuple(sorted(required))
 
@@ -1191,6 +1192,8 @@ def _evaluate_platform_result(
     *,
     deep_scraped: bool = False,
 ) -> None:
+    if result.checked_at is None:
+        result.checked_at = datetime.now(timezone.utc).isoformat()
     result.evidence_class = platform.evidence_class
     result.entity_scope = platform.entity_scope
     result.contract_revision = platform.contract_revision
@@ -1498,24 +1501,13 @@ def _resolve_alias_candidates(
             "emails": [],
             "phone_intel": [],
         }
-        candidate_discovery = merge_discoveries(
-            [
-                extract_discoverable_data(profile.profile_data)
-                for profile in profiles
-                if profile.profile_data
-            ]
-        )
-        reciprocal_link = cfg.username.casefold() in {
-            value.casefold()
-            for value in candidate_discovery.get("linked_usernames", [])
-            if isinstance(value, str)
-        }
         resolution = correlate_identity(
             root_payload,
             candidate_payload,
             handle_score=candidate.handle_similarity,
             direct_link=(
-                "linked_profile" in candidate.discovery_reasons or reciprocal_link
+                has_direct_profile_link(root_payload, candidate_payload)
+                or has_direct_profile_link(candidate_payload, root_payload)
             ),
         )
         warnings = []
@@ -1571,6 +1563,8 @@ async def _phase_smart_search(
     full_by_name = {platform.name: platform for platform in PLATFORMS}
     check_platforms: list[Platform] = []
     for name in ALIAS_PROBE_PLATFORMS[: cfg.alias_platform_limit]:
+        if cfg.platform_names and name not in cfg.platform_names:
+            continue
         platform = passed_by_name.get(name) or full_by_name.get(name)
         if platform is not None:
             check_platforms.append(platform)
@@ -2423,31 +2417,38 @@ async def _phase_identity_correlate(
         return
     from core.analysis.skill_loader import SkillError, run_skill
 
-    confirmed_platforms = []
+    confirmed_platforms: list[dict] = []
+    seen_urls: set[str] = set()
+
+    def add_profile(row: dict, username: str, verdict: str) -> None:
+        if not row.get("exists") or (row.get("verification") or {}).get("verdict") != "confirmed":
+            return
+        url = row.get("url")
+        if not url or url in seen_urls:
+            return
+        seen_urls.add(url)
+        data = row.get("profile_data") or {}
+        confirmed_platforms.append({
+            "platform": row.get("platform"), "url": url,
+            "username": username, "deterministic_verdict": verdict,
+            "display_name": data.get("name") or data.get("display_name", ""),
+            "bio": data.get("bio") or data.get("description", ""),
+            "location": data.get("location", ""),
+            "linked_accounts": extract_discoverable_data(data)["linked_usernames"],
+            "avatar_hash": data.get("avatar_hash", ""),
+        })
+
     for p in result.platforms:
-        if p.exists or (p.verification or {}).get("verdict") == "confirmed":
-            confirmed_platforms.append({
-                "platform": p.platform,
-                "url": p.url,
-                "display_name": (p.profile_data or {}).get("name")
-                or (p.profile_data or {}).get("display_name", ""),
-                "bio": (p.profile_data or {}).get("bio")
-                or (p.profile_data or {}).get("description", ""),
-                "location": (p.profile_data or {}).get("location", ""),
-                "linked_accounts": [
-                    (p.profile_data or {}).get(k, "")
-                    for k in ("twitter_username", "github_username")
-                    if (p.profile_data or {}).get(k)
-                ],
-                "avatar_hash": (p.profile_data or {}).get("avatar_hash", ""),
-            })
+        add_profile(p.to_dict(), result.username, "root_profile")
+        if len(confirmed_platforms) >= 10:
+            break  # Reserve half the LLM input budget for alias evidence.
 
     for id_cand in result.identity_candidates:
         cand_dict = id_cand.to_dict() if hasattr(id_cand, "to_dict") else id_cand
         if isinstance(cand_dict, dict):
-            for prof in cand_dict.get("confirmed_profiles", []):
-                if isinstance(prof, dict) and prof.get("url") and prof not in confirmed_platforms:
-                    confirmed_platforms.append(prof)
+            for prof in cand_dict.get("profiles", []):
+                if isinstance(prof, dict):
+                    add_profile(prof, cand_dict.get("username", ""), cand_dict.get("verdict", "uncertain"))
 
     inputs = {
         "username": cfg.username,
@@ -2471,7 +2472,7 @@ async def _phase_identity_correlate(
             inputs,
             budget=context.skill_budget,
         )
-        result.investigator_summary = correlation
+        result.identity_analysis = {**correlation, "advisory_only": True}
     except SkillError as exc:
         log.debug("identity_correlator failed: %s", exc)
         result.diagnostics.setdefault("warnings", []).append(
@@ -2743,6 +2744,11 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
     start_time = time.monotonic()
     result = ScanResult(username=cfg.username)
     platforms = _select_platforms(cfg.categories, cfg.platform_scope)
+    if cfg.platform_names:
+        unknown = set(cfg.platform_names) - {platform.name for platform in platforms}
+        if unknown:
+            raise ValueError(f"platforms outside selected catalogue scope: {', '.join(sorted(unknown))}")
+        platforms = [platform for platform in platforms if platform.name in cfg.platform_names]
     context = ScanContext.create(cfg)
     selected_by_name = {platform.name: platform for platform in platforms}
 
@@ -2755,6 +2761,7 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
         new_circuit_every=cfg.new_circuit_every,
         tor_control_password=cfg.tor_control_password,
         allow_private_networks=cfg.allow_private_networks,
+        max_requests=cfg.http_request_budget,
     ) as client:
         prepared_credentials = await prepare_provider_credentials(
             client,
@@ -2805,6 +2812,11 @@ async def run_scan(cfg: ScanConfig) -> ScanResult:
             # Cache warmers need the HTTP session, so drain them before the
             # client context exits. They never get to delay a scan indefinitely.
             await _drain_seed_tasks(context)
+        result.diagnostics["http_budget"] = {
+            "limit": cfg.http_request_budget,
+            "request_count": getattr(client, "request_count", None),
+            "exhausted": getattr(client, "budget_exhausted", False),
+        }
 
     result.scan_time = time.monotonic() - start_time
     context.emit(

@@ -934,7 +934,7 @@ async def test_check_platform_x_opengraph_title() -> None:
 
 @pytest.mark.asyncio
 async def test_phase_identity_correlate(monkeypatch) -> None:
-    from core.engine import _phase_identity_correlate, ScanContext
+    from core.engine import ScanContext, _phase_identity_correlate
 
     class _StubBackend:
         def __init__(self, response):
@@ -962,12 +962,45 @@ async def test_phase_identity_correlate(monkeypatch) -> None:
     cfg = ScanConfig(username="erkanrzgc", ai_correlate=True)
     res = ScanResult(username="erkanrzgc")
     res.platforms = [
-        PlatformResult(platform="GitHub", url="https://github.com/erkanrzgc", category="dev", exists=True, status="found", profile_data={"name": "Erkan Rizgic", "twitter_username": "erkanrzgcc"}),
+        PlatformResult(platform="GitHub", url="https://github.com/erkanrzgc", category="dev", exists=True, status="found", verification={"verdict": "confirmed"}, profile_data={"name": "Erkan Rizgic", "twitter_username": "erkanrzgcc"}),
     ]
     context = ScanContext.create(cfg)
 
     await _phase_identity_correlate(cfg, res, context)
-    assert res.investigator_summary is not None
-    assert res.investigator_summary["primary_alias"] == "erkanrzgc"
-    assert res.investigator_summary["likely_full_name"] == "Erkan Rizgic"
+    assert res.identity_analysis is not None
+    assert res.identity_analysis["primary_alias"] == "erkanrzgc"
+    assert res.identity_analysis["likely_full_name"] == "Erkan Rizgic"
+    assert res.identity_analysis["advisory_only"] is True
 
+
+@pytest.mark.asyncio
+async def test_identity_correlator_receives_alias_profiles_without_upgrading_verdict(monkeypatch):
+    from core.engine import ScanContext, _phase_identity_correlate
+    from core.models import IdentityCandidate
+
+    captured = {}
+
+    async def stub_skill(name, inputs, **kwargs):
+        captured.update(inputs)
+        return {"confidence": 100, "summary": "A model opinion"}
+
+    monkeypatch.setattr("core.analysis.skill_loader.run_skill", stub_skill)
+    profile = PlatformResult(
+        platform="GitHub", url="https://github.com/alicee", category="dev",
+        exists=True, verification={"verdict": "confirmed"},
+        profile_data={"name": "Alice Example", "bio": "Test bio"},
+    )
+    rejected = PlatformResult(
+        platform="Other", url="https://example.org/alice", category="dev",
+        exists=True, verification={"verdict": "uncertain"},
+    )
+    candidate = IdentityCandidate("alicee", 0.8, profiles=[profile])
+    result = ScanResult(username="alice", platforms=[rejected], identity_candidates=[candidate])
+    cfg = ScanConfig(username="alice", ai_correlate=True)
+    await _phase_identity_correlate(cfg, result, ScanContext.create(cfg))
+    assert len(captured["platforms"]) == 1
+    assert captured["platforms"][0]["display_name"] == "Alice Example"
+    assert captured["platforms"][0]["deterministic_verdict"] == "uncertain"
+    assert candidate.verdict == "uncertain"
+    assert candidate.score == 0.0
+    assert result.investigator_summary is None

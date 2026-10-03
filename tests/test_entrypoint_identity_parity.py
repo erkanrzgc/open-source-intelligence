@@ -1,4 +1,5 @@
 """Identity payload parity across the public scan entrypoints."""
+# ruff: noqa: E402 -- optional FastAPI must be checked before importing adapters.
 
 from __future__ import annotations
 
